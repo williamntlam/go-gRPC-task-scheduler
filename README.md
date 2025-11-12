@@ -2,7 +2,7 @@
 # High‑Level Implementation Guide — Go gRPC Task Scheduler (Redis + Workers/Consumers)
 
 **Updated:** 2025-11-12  
-**Stack:** Go • gRPC • Redis • Postgres • Prometheus/Grafana • Docker
+**Stack:** Go • gRPC • Redis • CockrachDB • Prometheus/Grafana • Docker
 
 This is a concise, step‑by‑step plan to build a **producer/consumer** task scheduler with **gRPC ingestion**, **Redis priority queues**, and **Go workers**. It layers in critical **system‑design concepts**: idempotency, retries, visibility timeouts, DLQs, backpressure, rate limits, circuit breakers, fan‑out/fan‑in, observability, and rollouts.
 
@@ -13,7 +13,7 @@ This is a concise, step‑by‑step plan to build a **producer/consumer** task s
 - **Redis** queues (critical/high/default/low) + **leases ZSET** for visibility timeouts.
 - **Go workers/consumers** that process tasks with bounded concurrency.
 - **Retry pump** + **Dead Letter Queues**.
-- **Postgres** as the source of truth for task state.
+- **CockrachDB** as the source of truth for task state.
 - **Prometheus** metrics + **Grafana** dashboard.
 - Clean separation so you can scale **producers** and **consumers** independently.
 
@@ -36,7 +36,7 @@ Create a protobuf in `proto/scheduler/v1/scheduler.proto`:
 
 ## 2) Stand Up Core Infra (Docker Compose)
 - **Redis 7** (default config is fine for dev)
-- **Postgres 16** (holds tasks/attempts/idempotency)
+- **CockrachDB** (holds tasks/attempts/idempotency)
 - **Prometheus** (scrapes :2112 and :2113)
 - **Grafana** (pre‑provision one dashboard JSON)
 
@@ -44,7 +44,7 @@ Create a protobuf in `proto/scheduler/v1/scheduler.proto`:
 
 ---
 
-## 3) Postgres Schema (Authoritative State)
+## 3) CockrachDB Schema (Authoritative State)
 Tables:
 - `tasks(task_id, type, priority, payload JSONB, status, attempts, max_attempts, next_run_at, created_at, updated_at)`
 - `task_attempts(task_id, started_at, finished_at, ok, error)`
@@ -78,7 +78,7 @@ Indexes:
 - **Insert task** row (`status=queued`), create mapping for `idempotency_key` if provided.
 - Push **lean payload** to Redis: `{ task_id, type, priority }` via `LPUSH q:{priority}`.
 - Return `{ job_id }` immediately.
-- For `WatchJob`, stream updates by polling Postgres or subscribing to internal events.
+- For `WatchJob`, stream updates by polling CockrachDB or subscribing to internal events.
 
 **Concepts used**: **idempotency**, **schema validation**, **timeouts**, **auth** (optional JWT/HMAC), **rate limiting** per API key (token bucket, Redis counters).
 
@@ -87,7 +87,7 @@ Indexes:
 ## 6) Worker/Consumer Design (Go)
 - **Process model**: each `worker` binary runs **N goroutines** (bounded by `WORKER_POOL`) and uses the Lua pop script for atomic claim.
 - On pop:
-  1) Mark `status=running`, `attempts += 1` (Postgres).
+  1) Mark `status=running`, `attempts += 1` (CockrachDB).
   2) Run handler with **context timeout = visibility timeout**.
   3) On **success**: `ZREM leases task_id`, set `status=succeeded`.
   4) On **error**: compute backoff, move to retry ZSET or DLQ, set `status` accordingly.
@@ -135,7 +135,7 @@ Implement idempotent handlers in `internal/worker/handlers.go`:
 
 ## 10) Fan‑Out / Fan‑In (Optional Upgrade)
 - **Fan‑out**: one job creates *k* sub‑tasks (e.g., `video:1080p`, `video:720p`, `thumbs`), each enqueued to Redis.
-- **Fan‑in aggregator**: track completion via Postgres rows or Redis keys (`job:{id}:done_count`). When all sub‑tasks succeed → mark parent `SUCCEEDED`. Timeouts push parent to `REVIEW` or `FAILED`.
+- **Fan‑in aggregator**: track completion via CockrachDB rows or Redis keys (`job:{id}:done_count`). When all sub‑tasks succeed → mark parent `SUCCEEDED`. Timeouts push parent to `REVIEW` or `FAILED`.
 
 **Concepts used**: **workflow orchestration**, **barriers**, **join/aggregation**.
 
@@ -174,7 +174,7 @@ Implement idempotent handlers in `internal/worker/handlers.go`:
 ## 14) Security & Multi‑Tenancy (Later)
 - gRPC **mTLS** or JWT for authn; **RBAC** for management endpoints.
 - **Tenant key prefixes** (`tenant:{id}:q:*`) with per‑tenant quotas.
-- **Audit logs** to Postgres for admin actions (replay DLQ, force retry).
+- **Audit logs** to CockrachDB for admin actions (replay DLQ, force retry).
 
 ---
 
@@ -194,7 +194,7 @@ Implement idempotent handlers in `internal/worker/handlers.go`:
   /load        # load generator
 /internal
   /config      # env → Config
-  /db          # Postgres helpers
+  /db          # CockrachDB helpers
   /queue       # Redis client + Lua scripts
   /worker      # handlers, backoff, circuit breaker
   /metrics     # Prometheus registration
@@ -207,7 +207,7 @@ Implement idempotent handlers in `internal/worker/handlers.go`:
 ---
 
 ## 17) Quick Bring‑Up Checklist
-1. `make dev` → Redis, Postgres, Prometheus, Grafana up.
+1. `make dev` → Redis, CockrachDB, Prometheus, Grafana up.
 2. `make migrate` → apply SQL.
 3. Start gateway: `make api` (gRPC on :8081, metrics :2112).
 4. Start worker: `make worker` (metrics :2113).
@@ -324,7 +324,7 @@ Add `compensation_type` for nodes that need rollback. On upstream failure with `
 - Cancel contexts on shutdown; drain leases gracefully.
 
 ### 3.5 Multi‑Region / DR (Later)
-- **Active/Active** with regional Redis and per‑region queues; keep **DAG orchestration regional**; replicate Postgres via logical replication.
+- **Active/Active** with regional Redis and per‑region queues; keep **DAG orchestration regional**; replicate CockrachDB via logical replication.
 - **Failover**: promote a read‑replica; re‑seed `retry:z:*` and `leases` carefully.
 - **Shard by tenant** to cap blast radius.
 
@@ -367,7 +367,7 @@ dag:{run_id}:done                 # SET of node_ids
 dag:{run_id}:deps:{node_id}       # SET of upstream node_ids
 dag:{run_id}:pending_count        # COUNTER
 ```
-> Source of truth remains Postgres; Redis is just a speed cache.
+> Source of truth remains CockrachDB; Redis is just a speed cache.
 
 ---
 
