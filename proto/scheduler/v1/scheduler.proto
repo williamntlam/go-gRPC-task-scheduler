@@ -1,0 +1,96 @@
+syntax = "proto3";
+
+package scheduler.v1;
+
+option go_package = "github.com/williamntlam/go-grpc-task-scheduler/proto/scheduler/v1;schedulerv1";
+
+// Import standard protobuf types for timestamps
+import "google/protobuf/timestamp.proto";
+
+// ============================================================================
+// Service Definition
+// ============================================================================
+
+service SchedulerService {
+    // Submit a new job for processing
+    rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
+    
+    // Get the current status of a job
+    rpc GetJob(GetJobRequest) returns (JobStatus);
+    
+    // Stream job status updates (server streaming)
+    rpc WatchJob(WatchJobRequest) returns (stream JobEvent);
+}
+
+// ============================================================================
+// Request/Response Messages
+// ============================================================================
+
+message SubmitJobRequest {
+    Job job = 1;
+}
+
+message SubmitJobResponse {
+    string job_id = 1;  // UUID of the created job
+}
+
+message GetJobRequest {
+    string job_id = 1;  // UUID of the job to retrieve
+}
+
+message WatchJobRequest {
+    string job_id = 1;  // UUID of the job to watch
+}
+
+// ============================================================================
+// Core Messages
+// ============================================================================
+
+message Job {
+    string job_id = 1;              // Optional: empty = generate new UUID
+    string type = 2;                // Handler type: "noop", "http_call", "db_tx", etc.
+    Priority priority = 3;           // Job priority level
+    string payload_json = 4;        // JSON string containing job-specific data
+    string idempotency_key = 5;     // Optional: for deduplication
+    int32 max_attempts = 6;         // Maximum retry attempts (default: 3)
+}
+
+message JobStatus {
+    string job_id = 1;
+    JobState state = 2;                              // Current state
+    int32 attempts = 3;                               // Number of attempts made
+    string last_error = 4;                           // Last error message (empty if none)
+    google.protobuf.Timestamp created_at = 5;       // When job was created
+    google.protobuf.Timestamp updated_at = 6;       // Last update time
+    google.protobuf.Timestamp started_at = 7;       // When execution started (if running)
+    google.protobuf.Timestamp finished_at = 8;       // When execution finished (if done)
+}
+
+message JobEvent {
+    string job_id = 1;
+    JobState state = 2;                              // New state
+    string message = 3;                              // Human-readable progress message
+    google.protobuf.Timestamp timestamp = 4;        // When this event occurred
+    int32 attempts = 5;                              // Current attempt count
+}
+
+// ============================================================================
+// Enumerations
+// ============================================================================
+
+enum Priority {
+    PRIORITY_UNSPECIFIED = 0;  // Required: proto3 default value
+    PRIORITY_CRITICAL = 1;
+    PRIORITY_HIGH = 2;
+    PRIORITY_DEFAULT = 3;
+    PRIORITY_LOW = 4;
+}
+
+enum JobState {
+    JOB_STATE_UNSPECIFIED = 0;  // Required: proto3 default value
+    JOB_STATE_QUEUED = 1;
+    JOB_STATE_RUNNING = 2;
+    JOB_STATE_SUCCEEDED = 3;
+    JOB_STATE_FAILED = 4;
+    JOB_STATE_DEADLETTER = 5;
+}
