@@ -20,6 +20,10 @@ service SchedulerService {
     
     // Stream job status updates (server streaming)
     rpc WatchJob(WatchJobRequest) returns (stream JobEvent);
+
+    rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);
+    rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+    
 }
 
 // ============================================================================
