@@ -2,7 +2,7 @@
 # High‑Level Implementation Guide — Go gRPC Task Scheduler (Redis + Workers/Consumers)
 
 **Updated:** 2025-11-12  
-**Stack:** Go • gRPC • Redis • CockrachDB • Prometheus/Grafana • Docker
+**Stack:** Go • gRPC • Redis • CockroachDB • Prometheus/Grafana • Docker
 
 This is a concise, step‑by‑step plan to build a **producer/consumer** task scheduler with **gRPC ingestion**, **Redis priority queues**, and **Go workers**. It layers in critical **system‑design concepts**: idempotency, retries, visibility timeouts, DLQs, backpressure, rate limits, circuit breakers, fan‑out/fan‑in, observability, and rollouts.
 
@@ -13,7 +13,7 @@ This is a concise, step‑by‑step plan to build a **producer/consumer** task s
 - **Redis** queues (critical/high/default/low) + **leases ZSET** for visibility timeouts.
 - **Go workers/consumers** that process tasks with bounded concurrency.
 - **Retry pump** + **Dead Letter Queues**.
-- **CockrachDB** as the source of truth for task state.
+- **CockroachDB** as the source of truth for task state (distributed SQL with ACID transactions).
 - **Prometheus** metrics + **Grafana** dashboard.
 - Clean separation so you can scale **producers** and **consumers** independently.
 
@@ -36,24 +36,61 @@ Create a protobuf in `proto/scheduler/v1/scheduler.proto`:
 
 ## 2) Stand Up Core Infra (Docker Compose)
 - **Redis 7** (default config is fine for dev)
-- **CockrachDB** (holds tasks/attempts/idempotency)
+- **CockroachDB** (holds tasks/attempts/idempotency; use `cockroachdb/cockroach:latest` image)
 - **Prometheus** (scrapes :2112 and :2113)
 - **Grafana** (pre‑provision one dashboard JSON)
 
 > Keep secrets in env files; use separate networks. Add a Makefile with `make dev`, `make api`, `make worker`, `make migrate`.
+> 
+> **CockroachDB Setup**: Initialize cluster with `cockroach init` or `--init` flag. Use connection string format: `postgresql://root@cockroachdb:26257/defaultdb?sslmode=disable` (dev) or with SSL for production. Enable `serializable` isolation level for strong consistency.
 
 ---
 
-## 3) CockrachDB Schema (Authoritative State)
+## 3) CockroachDB Schema (Authoritative State)
 Tables:
-- `tasks(task_id, type, priority, payload JSONB, status, attempts, max_attempts, next_run_at, created_at, updated_at)`
-- `task_attempts(task_id, started_at, finished_at, ok, error)`
-- `idempotency_keys(idempotency_key PRIMARY KEY → task_id)`
+- `tasks(task_id UUID PRIMARY KEY DEFAULT gen_random_uuid(), type STRING, priority STRING, payload JSONB, status STRING, attempts INT DEFAULT 0, max_attempts INT DEFAULT 3, next_run_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now())`
+- `task_attempts(task_id UUID REFERENCES tasks(task_id), started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ, ok BOOLEAN, error STRING, PRIMARY KEY (task_id, started_at))`
+- `idempotency_keys(idempotency_key STRING PRIMARY KEY, task_id UUID REFERENCES tasks(task_id), created_at TIMESTAMPTZ DEFAULT now())`
 
 Indexes:
-- `status`, `next_run_at`, and `(idempotency_key)`.
+- `CREATE INDEX idx_tasks_status ON tasks(status) WHERE status IN ('queued', 'running')`
+- `CREATE INDEX idx_tasks_next_run_at ON tasks(next_run_at) WHERE status = 'retry'`
+- `CREATE INDEX idx_tasks_priority_status ON tasks(priority, status)`
 
-> **Idempotency**: on `SubmitJob`, upsert the key; return existing `task_id` if conflict.
+> **CockroachDB Notes**: 
+> - Use `UUID` for primary keys (better for distributed performance than auto-increment).
+> - Use `TIMESTAMPTZ` for all timestamps (timezone-aware).
+> - Leverage `JSONB` for flexible payload storage with indexing support.
+> - Use `SERIALIZABLE` isolation level for strong consistency guarantees.
+> - **Idempotency**: on `SubmitJob`, use `INSERT ... ON CONFLICT (idempotency_key) DO UPDATE SET task_id = excluded.task_id RETURNING task_id`; return existing `task_id` if conflict.
+> - Consider partitioning by `created_at` or `status` for large-scale deployments.
+
+### 3.1 CockroachDB Implementation Best Practices
+
+**Connection Pooling**:
+- Use `pgxpool` (or `database/sql` with `pgx` driver) with connection pooling.
+- Configure pool size: `MaxConns=25`, `MinConns=5` per worker/API instance.
+- Set `MaxConnLifetime=30m` and `MaxConnIdleTime=5m` to prevent stale connections.
+- Use `application_name` in connection string for observability: `?application_name=task-scheduler-api`.
+
+**Transaction Handling**:
+- Always use explicit transactions (`BEGIN`/`COMMIT`) for multi-statement operations.
+- Set transaction isolation: `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE` (or use `pgx`'s `TxOptions`).
+- Keep transactions short (< 100ms) to reduce contention and retry overhead.
+- Handle `40001` (serialization failure) errors with exponential backoff retries (CockroachDB's automatic retry in `pgx` v5+).
+
+**Performance Optimizations**:
+- Use prepared statements for frequently executed queries (reduces parsing overhead).
+- Batch operations where possible: `INSERT INTO tasks VALUES (unnest($1::uuid[]), ...)`.
+- Use `SELECT ... FOR UPDATE SKIP LOCKED` for concurrent polling without blocking.
+- Leverage partial indexes: `CREATE INDEX idx_active_tasks ON tasks(status) WHERE status IN ('queued', 'running')`.
+- Monitor transaction retries: expose `cockroachdb_transaction_retries_total` metric.
+
+**Migrations**:
+- Use `golang-migrate` or `goose` with CockroachDB-compatible syntax.
+- Test migrations on a staging cluster before production.
+- Use `IF NOT EXISTS` for idempotent migrations.
+- Consider using CockroachDB's `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` for zero-downtime schema changes.
 
 ---
 
@@ -78,7 +115,7 @@ Indexes:
 - **Insert task** row (`status=queued`), create mapping for `idempotency_key` if provided.
 - Push **lean payload** to Redis: `{ task_id, type, priority }` via `LPUSH q:{priority}`.
 - Return `{ job_id }` immediately.
-- For `WatchJob`, stream updates by polling CockrachDB or subscribing to internal events.
+- For `WatchJob`, stream updates by polling CockroachDB or subscribing to internal events. Consider using CockroachDB's `CHANGEFEED` for real-time updates (requires enterprise license) or polling with `SELECT ... FOR UPDATE SKIP LOCKED` for efficient concurrent polling.
 
 **Concepts used**: **idempotency**, **schema validation**, **timeouts**, **auth** (optional JWT/HMAC), **rate limiting** per API key (token bucket, Redis counters).
 
@@ -87,10 +124,10 @@ Indexes:
 ## 6) Worker/Consumer Design (Go)
 - **Process model**: each `worker` binary runs **N goroutines** (bounded by `WORKER_POOL`) and uses the Lua pop script for atomic claim.
 - On pop:
-  1) Mark `status=running`, `attempts += 1` (CockrachDB).
+  1) Use CockroachDB transaction: `BEGIN; UPDATE tasks SET status='running', attempts=attempts+1, updated_at=now() WHERE task_id=$1 AND status='queued' RETURNING task_id; INSERT INTO task_attempts(task_id, started_at) VALUES($1, now()); COMMIT;` (ensures atomic state transition).
   2) Run handler with **context timeout = visibility timeout**.
-  3) On **success**: `ZREM leases task_id`, set `status=succeeded`.
-  4) On **error**: compute backoff, move to retry ZSET or DLQ, set `status` accordingly.
+  3) On **success**: `ZREM leases task_id`, then `UPDATE tasks SET status='succeeded', updated_at=now() WHERE task_id=$1; UPDATE task_attempts SET finished_at=now(), ok=true WHERE task_id=$1 AND finished_at IS NULL;`.
+  4) On **error**: compute backoff, move to retry ZSET or DLQ, then `UPDATE tasks SET status='failed'|'retry'|'deadletter', next_run_at=$2, updated_at=now() WHERE task_id=$1; UPDATE task_attempts SET finished_at=now(), ok=false, error=$3 WHERE task_id=$1 AND finished_at IS NULL;`.
 
 **Concepts used**: **bounded concurrency**, **backpressure** (do not exceed pool size), **visibility timeout**, **retry with exponential backoff + jitter**, **DLQ isolation**.
 
@@ -114,7 +151,7 @@ Implement idempotent handlers in `internal/worker/handlers.go`:
 - `always_fail` → always error → DLQ after `max_attempts`.
 - `sleep(ms)` → sleep > visibility to force a **reap**.
 - `http_call(url)` → external I/O with **circuit breaker** + **timeouts**.
-- `db_tx(unique_key)` → `INSERT ... ON CONFLICT DO NOTHING` to prove **idempotent effects**.
+- `db_tx(unique_key)` → `INSERT ... ON CONFLICT DO NOTHING` to prove **idempotent effects**. Use CockroachDB transactions with `SERIALIZABLE` isolation to ensure exactly-once semantics for side effects.
 
 **Concepts used**: **idempotent side‑effects**, **circuit breakers**, **timeouts**, **retries**.
 
@@ -135,7 +172,7 @@ Implement idempotent handlers in `internal/worker/handlers.go`:
 
 ## 10) Fan‑Out / Fan‑In (Optional Upgrade)
 - **Fan‑out**: one job creates *k* sub‑tasks (e.g., `video:1080p`, `video:720p`, `thumbs`), each enqueued to Redis.
-- **Fan‑in aggregator**: track completion via CockrachDB rows or Redis keys (`job:{id}:done_count`). When all sub‑tasks succeed → mark parent `SUCCEEDED`. Timeouts push parent to `REVIEW` or `FAILED`.
+- **Fan‑in aggregator**: track completion via CockroachDB rows or Redis keys (`job:{id}:done_count`). Use CockroachDB's `SELECT COUNT(*) FROM tasks WHERE parent_id=$1 AND status='succeeded'` with `SERIALIZABLE` isolation to ensure accurate counts. When all sub‑tasks succeed → mark parent `SUCCEEDED` in a transaction. Timeouts push parent to `REVIEW` or `FAILED`.
 
 **Concepts used**: **workflow orchestration**, **barriers**, **join/aggregation**.
 
@@ -174,7 +211,7 @@ Implement idempotent handlers in `internal/worker/handlers.go`:
 ## 14) Security & Multi‑Tenancy (Later)
 - gRPC **mTLS** or JWT for authn; **RBAC** for management endpoints.
 - **Tenant key prefixes** (`tenant:{id}:q:*`) with per‑tenant quotas.
-- **Audit logs** to CockrachDB for admin actions (replay DLQ, force retry).
+- **Audit logs** to CockroachDB for admin actions (replay DLQ, force retry). Use CockroachDB's time-travel queries (`AS OF SYSTEM TIME`) for point-in-time audit analysis.
 
 ---
 
@@ -194,7 +231,7 @@ Implement idempotent handlers in `internal/worker/handlers.go`:
   /load        # load generator
 /internal
   /config      # env → Config
-  /db          # CockrachDB helpers
+  /db          # CockroachDB helpers (connection pooling, transactions, migrations)
   /queue       # Redis client + Lua scripts
   /worker      # handlers, backoff, circuit breaker
   /metrics     # Prometheus registration
@@ -207,8 +244,8 @@ Implement idempotent handlers in `internal/worker/handlers.go`:
 ---
 
 ## 17) Quick Bring‑Up Checklist
-1. `make dev` → Redis, CockrachDB, Prometheus, Grafana up.
-2. `make migrate` → apply SQL.
+1. `make dev` → Redis, CockroachDB, Prometheus, Grafana up.
+2. `make migrate` → apply SQL migrations (use `cockroach sql` or `pgx` migrations with CockroachDB-compatible syntax).
 3. Start gateway: `make api` (gRPC on :8081, metrics :2112).
 4. Start worker: `make worker` (metrics :2113).
 5. Submit jobs with `grpcurl` or a client stub.
@@ -324,9 +361,14 @@ Add `compensation_type` for nodes that need rollback. On upstream failure with `
 - Cancel contexts on shutdown; drain leases gracefully.
 
 ### 3.5 Multi‑Region / DR (Later)
-- **Active/Active** with regional Redis and per‑region queues; keep **DAG orchestration regional**; replicate CockrachDB via logical replication.
-- **Failover**: promote a read‑replica; re‑seed `retry:z:*` and `leases` carefully.
-- **Shard by tenant** to cap blast radius.
+- **Active/Active** with regional Redis and per‑region queues; keep **DAG orchestration regional**.
+- **CockroachDB Multi-Region**: Use CockroachDB's native multi-region features:
+  - Define regions: `ALTER DATABASE scheduler SET PRIMARY REGION "us-east-1"; ALTER DATABASE scheduler ADD REGION "us-west-1";`
+  - Use `REGIONAL BY ROW` tables for low-latency writes: `ALTER TABLE tasks SET LOCALITY REGIONAL BY ROW;`
+  - Use `GLOBAL` tables for reference data: `ALTER TABLE dag_definitions SET LOCALITY GLOBAL;`
+  - Leverage follower reads for cross-region queries: `SELECT ... FROM tasks AS OF SYSTEM TIME follower_read_timestamp();`
+- **Failover**: CockroachDB handles automatic failover; re‑seed `retry:z:*` and `leases` carefully after region failover.
+- **Shard by tenant** to cap blast radius; use CockroachDB's `REGIONAL BY ROW AS tenant_id` for tenant-based sharding.
 
 ### 3.6 Chaos & Game Days
 - Fault injection flags in handlers: random 500s, timeouts, sleeps.
@@ -367,7 +409,7 @@ dag:{run_id}:done                 # SET of node_ids
 dag:{run_id}:deps:{node_id}       # SET of upstream node_ids
 dag:{run_id}:pending_count        # COUNTER
 ```
-> Source of truth remains CockrachDB; Redis is just a speed cache.
+> Source of truth remains CockroachDB; Redis is just a speed cache. Use CockroachDB's `SERIALIZABLE` isolation for DAG state consistency.
 
 ---
 
