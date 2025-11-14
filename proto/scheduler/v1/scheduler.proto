@@ -46,6 +46,27 @@ message WatchJobRequest {
     string job_id = 1;  // UUID of the job to watch
 }
 
+message CancelJobRequest {
+    string job_id = 1;  // UUID of the job to cancel
+}
+
+message CancelJobResponse {
+    bool cancelled = 1;  // Whether the job was successfully cancelled
+}
+
+message ListJobsRequest {
+    JobState state_filter = 1;        // Optional: filter by state
+    Priority priority_filter = 2;      // Optional: filter by priority
+    string type_filter = 3;            // Optional: filter by job type
+    int32 page_size = 4;               // Pagination: number of results per page
+    string page_token = 5;             // Pagination: token for next page
+}
+
+message ListJobsResponse {
+    repeated JobStatus jobs = 1;        // List of job statuses
+    string next_page_token = 2;        // Token for next page (empty if no more)
+}
+
 // ============================================================================
 // Core Messages
 // ============================================================================
