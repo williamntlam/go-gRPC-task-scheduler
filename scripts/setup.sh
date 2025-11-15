@@ -63,13 +63,9 @@ CREATE TABLE IF NOT EXISTS task_attempts (
     FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
 );
 
--- Create idempotency_keys table
-CREATE TABLE IF NOT EXISTS idempotency_keys (
-    idempotency_key STRING PRIMARY KEY,
-    task_id UUID NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
-);
+-- Note: idempotency_keys table removed
+-- Idempotency is now handled by using idempotency_key as task_id directly
+-- If task_id already exists, it means the job was already submitted (idempotent)
 
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status) WHERE status IN ('queued', 'running');

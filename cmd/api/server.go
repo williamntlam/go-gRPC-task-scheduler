@@ -7,12 +7,13 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/williamntlam/go-grpc-task-scheduler/internal/db"
 	schedulerv1 "github.com/williamntlam/go-grpc-task-scheduler/proto/scheduler/v1"
-	// TODO: Add your imports for DB, Redis, etc.
-	// "github.com/jackc/pgx/v5/pgxpool"
+	// TODO: Add your imports for Redis, etc.
 	// "github.com/redis/go-redis/v9"
 )
 
@@ -22,18 +23,19 @@ type Server struct {
 	// This ensures your server will work even if new methods are added to the interface
 	schedulerv1.UnimplementedSchedulerServiceServer
 
-	// Add your dependencies here
-	// db    *pgxpool.Pool
+	// Database connection pool
+	db *pgxpool.Pool
+	// TODO: Add other dependencies
 	// redis *redis.Client
 	// logger *zap.Logger
 	// metrics *prometheus.Registry
 }
 
 // NewServer creates a new Server instance
-func NewServer(/* db *pgxpool.Pool, redis *redis.Client */) *Server {
+func NewServer(db *pgxpool.Pool /* redis *redis.Client */) *Server {
 	return &Server{
-		// Initialize your dependencies
-		// db:    db,
+		db: db,
+		// TODO: Initialize other dependencies
 		// redis: redis,
 	}
 }
@@ -82,18 +84,8 @@ func validateSubmitJobRequest(req *schedulerv1.SubmitJobRequest) error {
 		}
 	}
 
-	// Validate idempotency_key format (if provided)
-	// Idempotency keys should be UUIDs for best practices
-	if job.IdempotencyKey != "" {
-		key := strings.TrimSpace(job.IdempotencyKey)
-		if len(key) == 0 {
-			return status.Error(codes.InvalidArgument, "idempotency_key cannot be empty or whitespace")
-		}
-		// Validate UUID format
-		if _, err := uuid.Parse(key); err != nil {
-			return status.Error(codes.InvalidArgument, "idempotency_key must be a valid UUID")
-		}
-	}
+	// Note: idempotency_key is no longer used
+	// Idempotency is handled by using job_id directly - if job_id exists, return existing job
 
 	return nil
 }
@@ -105,14 +97,86 @@ func (s *Server) SubmitJob(ctx context.Context, req *schedulerv1.SubmitJobReques
 		return nil, err
 	}
 
-	// TODO: Implement
-	// 2. Check idempotency if key provided
-	// 3. Insert task into CockroachDB
-	// 4. Push to Redis queue (LPUSH q:{priority})
-	// 5. Return job_id
+	// Extract job data from request
+	job := req.Job // This is the Job struct from the request
 
+	// Extract job data from request (will be used when implementing database insert)
+	jobType := job.Type             // string (required - e.g., "noop", "http_call")
+	priority := job.Priority        // Priority enum (CRITICAL, HIGH, DEFAULT, LOW)
+	payloadJSON := job.PayloadJson  // string (optional JSON)
+	maxAttempts := job.MaxAttempts  // int32 (optional, defaults to 0 if not set)
+
+	// Determine job_id:
+	// 1. If job_id provided by client, use it (enables idempotency - same job_id = same job)
+	// 2. Otherwise, generate new UUID
+	// 
+	// Idempotency: If job_id already exists in tasks table, return existing job
+	var jobID uuid.UUID
+	if job.JobId != "" {
+		// Client provided job_id, parse it
+		parsedID, err := uuid.Parse(job.JobId)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "job_id must be a valid UUID")
+		}
+		jobID = parsedID
+	} else {
+		// Generate new UUID for the job
+		jobID = uuid.New()
+	}
+
+	// Check if the jobId is in the database already (idempotency check)
+	exists, err := db.JobExists(ctx, s.db, jobID)
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to check if job exists: %v", err))
+	}
+
+	if exists {
+		// Job already exists, return existing job_id (idempotent)
+		return &schedulerv1.SubmitJobResponse{
+			JobId: jobID.String(),
+		}, nil
+	}
+
+	// Set default max_attempts if not provided
+	if maxAttempts == 0 {
+		maxAttempts = 3
+	}
+
+	// Convert priority enum to string
+	priorityStr := priority.String()
+	// Remove "PRIORITY_" prefix if present
+	priorityStr = strings.TrimPrefix(priorityStr, "PRIORITY_")
+	priorityStr = strings.ToLower(priorityStr)
+
+	// Create job in database
+	dbJob := db.Job{
+		TaskID:      jobID,
+		Type:        jobType,
+		Priority:    priorityStr,
+		PayloadJSON: json.RawMessage(payloadJSON),
+		Status:      "queued",
+		Attempts:    0,
+		MaxAttempts: int(maxAttempts),
+		NextRunAt:   nil,
+	}
+
+	createdID, alreadyExists, err := db.CreateJob(ctx, s.db, dbJob)
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to create job: %v", err))
+	}
+
+	if alreadyExists {
+		// Job was created between our check and insert (race condition handled)
+		return &schedulerv1.SubmitJobResponse{
+			JobId: createdID.String(),
+		}, nil
+	}
+
+	// TODO: Push to Redis queue (LPUSH q:{priority})
+
+	// Return job_id
 	return &schedulerv1.SubmitJobResponse{
-		JobId: "placeholder-job-id",
+		JobId: jobID.String(),
 	}, nil
 }
 

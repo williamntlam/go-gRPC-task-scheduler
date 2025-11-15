@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
+	"github.com/williamntlam/go-grpc-task-scheduler/internal/db"
 	schedulerv1 "github.com/williamntlam/go-grpc-task-scheduler/proto/scheduler/v1"
 )
 
@@ -34,8 +35,24 @@ func main() {
 	grpcPort := getEnv("GRPC_PORT", defaultGRPCPort)
 	metricsPort := getEnv("METRICS_PORT", defaultMetricsPort)
 
-	// TODO: Initialize dependencies (will be added incrementally)
-	// - CockroachDB connection pool
+	// Initialize CockroachDB connection pool
+	dbConfig := db.Config{
+		Host:     getEnv("COCKROACHDB_HOST", "localhost"),
+		Port:     getEnv("COCKROACHDB_PORT", "26257"),
+		User:     getEnv("COCKROACHDB_USER", "root"),
+		Password: getEnv("COCKROACHDB_PASSWORD", ""),
+		Database: getEnv("COCKROACHDB_DATABASE", "scheduler"),
+		SSLMode:  getEnv("COCKROACHDB_SSLMODE", "disable"),
+	}
+
+	dbPool, err := db.NewPool(context.Background(), dbConfig)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer db.ClosePool(dbPool)
+	log.Println("Connected to CockroachDB")
+
+	// TODO: Initialize other dependencies
 	// - Redis client
 	// - Logger (zap/zerolog)
 	// - Prometheus metrics registry
@@ -48,7 +65,7 @@ func main() {
 	)
 
 	// Create and register the scheduler service
-	server := NewServer(/* db, redis */)
+	server := NewServer(dbPool /* redis */)
 	schedulerv1.RegisterSchedulerServiceServer(grpcServer, server)
 
 	// Enable gRPC reflection for development/testing (disable in production)
