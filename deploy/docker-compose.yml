@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # CockroachDB - Source of truth for task state
   cockroachdb:
