@@ -5,12 +5,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-	// TODO: Step 1 - Add necessary imports
-	// You'll need to uncomment and add:
-	// "encoding/json" (for JSON marshaling)
-	// "fmt" (for error formatting)
-	// "github.com/google/uuid" (for UUID type)
-	// "github.com/redis/go-redis/v9" (for Redis client - already imported in redis.go, but needed here)
 )
 
 // JobPayload represents the payload pushed to Redis queues
@@ -20,7 +14,9 @@ import (
 // - Type (string, JSON tag: "type")
 // - Priority (string, JSON tag: "priority")
 type JobPayload struct {
-	// TODO: Add fields here
+	TaskID   string `json:"task_id"`
+	Type     string `json:"type"`
+	Priority string `json:"priority"`
 }
 
 // PushJob pushes a job to the appropriate Redis priority queue

@@ -14,16 +14,16 @@ import (
 // Job represents a job in the database (stored in tasks table)
 // Note: Database table is "tasks" but we use "Job" terminology in code
 type Job struct {
-	TaskID      uuid.UUID
-	Type        string
-	Priority    string
-	PayloadJSON json.RawMessage
-	Status      string
-	Attempts    int
-	MaxAttempts int
-	NextRunAt   *time.Time
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	TaskID      uuid.UUID       `json:"task_id"`
+	Type        string          `json:"type"`
+	Priority    string          `json:"priority"`
+	PayloadJSON json.RawMessage `json:"payload"`
+	Status      string          `json:"status"`
+	Attempts    int             `json:"attempts"`
+	MaxAttempts int             `json:"max_attempts"`
+	NextRunAt   *time.Time      `json:"next_run_at"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 // GetJobByID retrieves a job by its ID
