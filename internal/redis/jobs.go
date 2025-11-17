@@ -2,6 +2,8 @@ package redis
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -40,19 +42,32 @@ type JobPayload struct {
 func PushJob(ctx context.Context, client *redis.Client, jobID uuid.UUID, jobType, priority string) error {
 	// TODO: Step 3.1 - Get queue name using getQueueName helper
 	// queueName := getQueueName(priority)
+	queueName := getQueueName(priority)
 
 	// TODO: Step 3.2 - Validate queue name (return error if empty)
+	if queueName == "" {
+		return fmt.Errorf("invalid priority: %s", priority)
+	}
 
 	// TODO: Step 3.3 - Create JobPayload struct
-
+	payload := JobPayload{
+		TaskID: jobID.String(),
+		Type: jobType,
+		Priority: priority,
+	}
+	
 	// TODO: Step 3.4 - Marshal payload to JSON
+	payloadJSON, err := json.Marshal(payload)
 
 	// TODO: Step 3.5 - Handle marshaling errors
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
 
 	// TODO: Step 3.6 - Push to Redis using LPUSH
-	// Hint: client.LPush(ctx, queueName, payloadJSON).Err()
-
-	// TODO: Step 3.7 - Handle Redis errors and return
+	if err = client.LPush(ctx, queueName, payloadJSON).Err(); err != nil {
+		return fmt.Errorf("failed to push job to redis: %w", err)
+	}
 
 	return nil
 }
