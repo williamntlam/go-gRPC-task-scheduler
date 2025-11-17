@@ -88,13 +88,17 @@ func PushJob(ctx context.Context, client *redis.Client, jobID uuid.UUID, jobType
 // 3. Return empty string for invalid priorities (default case)
 func getQueueName(priority string) string {
 	// TODO: Step 4.1 - Implement switch statement
-	// switch priority {
-	// case "critical":
-	//     return "q:critical"
-	// ... (add other cases)
-	// default:
-	//     return ""
-	// }
 
-	return ""
+	switch priority {
+	case "critical":
+		return "q:critical"
+	case "high":
+		return "q:high"
+	case "default":
+		return "q:default"
+	case "low":
+		return "q:low"
+	default:
+		return ""
+	}
 }
