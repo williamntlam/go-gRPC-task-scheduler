@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/google/uuid"
@@ -12,9 +13,10 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/db"
+	"github.com/williamntlam/go-grpc-task-scheduler/internal/redis"
 	schedulerv1 "github.com/williamntlam/go-grpc-task-scheduler/proto/scheduler/v1"
-	// TODO: Add your imports for Redis, etc.
-	// "github.com/redis/go-redis/v9"
+
+	redisc "github.com/redis/go-redis/v9"
 )
 
 // Server implements the SchedulerServiceServer interface
@@ -25,6 +27,7 @@ type Server struct {
 
 	// Database connection pool
 	db *pgxpool.Pool
+	redis *redisc.Client
 	// TODO: Add other dependencies
 	// redis *redis.Client
 	// logger *zap.Logger
@@ -32,11 +35,10 @@ type Server struct {
 }
 
 // NewServer creates a new Server instance
-func NewServer(db *pgxpool.Pool /* redis *redis.Client */) *Server {
+func NewServer(db *pgxpool.Pool, redisClient *redisc.Client) *Server {
 	return &Server{
-		db: db,
-		// TODO: Initialize other dependencies
-		// redis: redis,
+		db:    db,
+		redis: redisClient,
 	}
 }
 
@@ -172,7 +174,14 @@ func (s *Server) SubmitJob(ctx context.Context, req *schedulerv1.SubmitJobReques
 		}, nil
 	}
 
-	// TODO: Push to Redis queue (LPUSH q:{priority})
+	// Push to Redis queue (LPUSH q:{priority})
+	err = redis.PushJob(ctx, s.redis, jobID, jobType, priorityStr)
+	if err != nil {
+		// Log error but don't fail the request (job is already in DB)
+		// This is a design decision: DB is source of truth, Redis is for processing
+		log.Printf("Warning: failed to push job %s to Redis queue: %v", jobID.String(), err)
+		// Optionally, you could return an error here if you want queue failures to fail the request
+	}
 
 	// Return job_id
 	return &schedulerv1.SubmitJobResponse{

@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/reflection"
 
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/db"
+	"github.com/williamntlam/go-grpc-task-scheduler/internal/redis"
 	schedulerv1 "github.com/williamntlam/go-grpc-task-scheduler/proto/scheduler/v1"
 )
 
@@ -57,6 +58,21 @@ func main() {
 	// - Logger (zap/zerolog)
 	// - Prometheus metrics registry
 
+	redisConfig := redis.Config{
+		Host: getEnv("REDIS_HOST", "localhost"),
+		Port: getEnv("REDIS_PORT", "6379"),
+		Password: getEnv("REDIS_PASSWORD", ""),
+		DB: 0,
+	}
+
+	redisClient, err := redis.NewClient(context.Background(), redisConfig)
+	if err != nil {
+		log.Fatalf("Failed to connect to Redis: %v", err)
+	}
+
+	defer redis.CloseClient(redisClient)
+	log.Println("Connected to Redis")
+
 	// Create gRPC server with interceptors (metrics, tracing, etc.)
 	// TODO: Add interceptors for metrics, tracing, logging
 	grpcServer := grpc.NewServer(
@@ -65,7 +81,7 @@ func main() {
 	)
 
 	// Create and register the scheduler service
-	server := NewServer(dbPool /* redis */)
+	server := NewServer(dbPool, redisClient)
 	schedulerv1.RegisterSchedulerServiceServer(grpcServer, server)
 
 	// Enable gRPC reflection for development/testing (disable in production)
