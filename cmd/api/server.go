@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/db"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/redis"
@@ -191,12 +192,51 @@ func (s *Server) SubmitJob(ctx context.Context, req *schedulerv1.SubmitJobReques
 
 // GetJob retrieves the status of a job
 func (s *Server) GetJob(ctx context.Context, req *schedulerv1.GetJobRequest) (*schedulerv1.JobStatus, error) {
-	// TODO: Implement
 	// 1. Query CockroachDB for task by job_id
 	// 2. Convert to JobStatus message
 	// 3. Return
 
-	return nil, nil
+	jobID, err := uuid.Parse(req.JobId)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "job_id must be a valid UUID")
+	}
+
+	job, err := db.GetJobByID(ctx, s.db, jobID)
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to get job: %v", err))
+	}
+	if job == nil {
+		return nil, status.Error(codes.NotFound, "job not found")
+	} 
+
+	var state schedulerv1.JobState
+	switch job.Status {
+	case "queued":
+		state = schedulerv1.JobState_JOB_STATE_QUEUED
+	case "running":
+		state = schedulerv1.JobState_JOB_STATE_RUNNING
+	case "succeeded":
+		state = schedulerv1.JobState_JOB_STATE_SUCCEEDED
+	case "failed":
+		state = schedulerv1.JobState_JOB_STATE_FAILED
+	case "deadletter":
+		state = schedulerv1.JobState_JOB_STATE_DEADLETTER
+	default:
+		state = schedulerv1.JobState_JOB_STATE_UNSPECIFIED
+	}
+
+	jobStatus := schedulerv1.JobStatus{
+		JobId:     job.TaskID.String(),
+		State:     state,
+		Attempts:  int32(job.Attempts),
+		LastError: "",
+		CreatedAt: timestamppb.New(job.CreatedAt),
+		UpdatedAt: timestamppb.New(job.UpdatedAt),
+		StartedAt: nil,
+		FinishedAt: nil,
+	}
+
+	return &jobStatus, nil
 }
 
 // WatchJob streams job status updates
