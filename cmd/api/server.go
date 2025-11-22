@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -91,6 +92,27 @@ func validateSubmitJobRequest(req *schedulerv1.SubmitJobRequest) error {
 	// Idempotency is handled by using job_id directly - if job_id exists, return existing job
 
 	return nil
+}
+
+// statusToJobState converts a database status string to a JobState enum
+func statusToJobState(status string) schedulerv1.JobState {
+	switch status {
+	case "queued":
+		return schedulerv1.JobState_JOB_STATE_QUEUED
+	case "running":
+		return schedulerv1.JobState_JOB_STATE_RUNNING
+	case "succeeded":
+		return schedulerv1.JobState_JOB_STATE_SUCCEEDED
+	case "failed":
+		return schedulerv1.JobState_JOB_STATE_FAILED
+	case "deadletter":
+		return schedulerv1.JobState_JOB_STATE_DEADLETTER
+	case "cancelled":
+		// Handle cancelled if needed
+		return schedulerv1.JobState_JOB_STATE_UNSPECIFIED
+	default:
+		return schedulerv1.JobState_JOB_STATE_UNSPECIFIED
+	}
 }
 
 // SubmitJob handles job submission requests
@@ -209,25 +231,9 @@ func (s *Server) GetJob(ctx context.Context, req *schedulerv1.GetJobRequest) (*s
 		return nil, status.Error(codes.NotFound, "job not found")
 	} 
 
-	var state schedulerv1.JobState
-	switch job.Status {
-	case "queued":
-		state = schedulerv1.JobState_JOB_STATE_QUEUED
-	case "running":
-		state = schedulerv1.JobState_JOB_STATE_RUNNING
-	case "succeeded":
-		state = schedulerv1.JobState_JOB_STATE_SUCCEEDED
-	case "failed":
-		state = schedulerv1.JobState_JOB_STATE_FAILED
-	case "deadletter":
-		state = schedulerv1.JobState_JOB_STATE_DEADLETTER
-	default:
-		state = schedulerv1.JobState_JOB_STATE_UNSPECIFIED
-	}
-
 	jobStatus := schedulerv1.JobStatus{
 		JobId:     job.TaskID.String(),
-		State:     state,
+		State:     statusToJobState(job.Status),
 		Attempts:  int32(job.Attempts),
 		LastError: "",
 		CreatedAt: timestamppb.New(job.CreatedAt),
@@ -241,12 +247,113 @@ func (s *Server) GetJob(ctx context.Context, req *schedulerv1.GetJobRequest) (*s
 
 // WatchJob streams job status updates
 func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.SchedulerService_WatchJobServer) error {
-	// TODO: Implement
-	// 1. Poll CockroachDB for job status changes
-	// 2. Send JobEvent messages via stream.Send()
-	// 3. Continue until job completes or context cancelled
+	// Step 1: Parse and validate job_id from request
+	// - Extract req.JobId (string)
+	// - Parse to uuid.UUID using uuid.Parse()
+	// - Handle parsing errors (return gRPC error if invalid)
+	// - Same pattern as GetJob
 
-	return nil
+	jobID, err := uuid.Parse(req.JobId)
+	if err != nil {
+		return status.Error(codes.InvalidArgument, "job_id must be a valid UUID")
+	}
+
+	// Step 2: Set up polling infrastructure
+	// - Create ticker: time.NewTicker(1 * time.Second) or 2 seconds
+	// - Always defer ticker.Stop() to clean up resources
+	// - Track last known status: lastStatus := ""
+	// - Track if first poll: firstPoll := true
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	lastStatus := ""
+	firstPoll := true
+
+	for {
+		select {
+		case <-stream.Context().Done():
+			return nil
+		case <-ticker.C:
+			// Time to poll the database and check for status changes
+			
+			// 1. Poll database using db.GetJobByID()
+			//    - Use stream.Context() as the context
+			//    - Handle errors (log and continue, or return)
+			//    - Handle job not found (send error event and return)
+
+			job, err := db.GetJobByID(stream.Context(), s.db, jobID)
+
+			if err != nil {
+				// Database error occurred
+				log.Printf("Error polling job %s: %v", jobID.String(), err)
+				return fmt.Errorf("failed to poll job: %w", err)
+			}
+
+			// Handle job not found
+			if job == nil {
+				// Job doesn't exist - send error event and return
+				errorEvent := &schedulerv1.JobEvent{
+					JobId:     jobID.String(),
+					State:     schedulerv1.JobState_JOB_STATE_UNSPECIFIED,
+					Message:   "Job not found",
+					Timestamp: timestamppb.Now(),
+					Attempts:  0,
+				}
+				if err := stream.Send(errorEvent); err != nil {
+					return err
+				}
+				return status.Error(codes.NotFound, "job not found")
+			}
+						
+			// 2. Check if status changed
+			//    - Compare current job.Status with lastStatus
+			//    - If different (or first poll), proceed to send event
+			
+			if job.Status != lastStatus || firstPoll {
+
+				// 3. Convert to JobEvent
+				//    - Create schedulerv1.JobEvent message
+				//    - Set all fields (JobId, State, Message, Timestamp, Attempts)
+				
+				// 4. Send the event
+				//    - Use stream.Send(&jobEvent)
+				//    - Handle send errors (return error if stream broken)
+
+				jobEvent := &schedulerv1.JobEvent{
+					JobId: job.TaskID.String(),
+					State:     statusToJobState(job.Status),
+					Message:   "Job status changed to " + job.Status,  // Human-readable message
+					Timestamp: timestamppb.Now(),  // Current time
+					Attempts:  int32(job.Attempts),
+				}
+
+				if err := stream.Send(jobEvent); err != nil {
+					log.Printf("Error streaming job %s: %v", jobID.String(), err)
+					return fmt.Errorf("failed to stream job: %w", err)
+				}
+
+				// 5. Update lastStatus
+				//    - lastStatus = job.Status
+
+				lastStatus = job.Status
+				firstPoll = false
+
+			}
+			
+			// 6. Check if job is complete (terminal states)
+			//    - If status is "succeeded", "failed", or "deadletter":
+			//      * return nil (exit loop, job is done)
+			//    - Otherwise, continue polling
+			if job.Status == "succeeded" || job.Status == "failed" || job.Status == "deadletter" {
+				// Job is complete, exit the polling loop
+				return nil
+			}
+			// Otherwise, continue polling (loop continues)
+		}
+
+	}
+
 }
 
 // CancelJob cancels a running job
