@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -112,6 +113,44 @@ func statusToJobState(status string) schedulerv1.JobState {
 		return schedulerv1.JobState_JOB_STATE_UNSPECIFIED
 	default:
 		return schedulerv1.JobState_JOB_STATE_UNSPECIFIED
+	}
+}
+
+func jobStateToString(status schedulerv1.JobState) string {
+	switch status {
+	case schedulerv1.JobState_JOB_STATE_QUEUED:
+		return "queued"
+	case schedulerv1.JobState_JOB_STATE_RUNNING:
+		return "running"
+	case schedulerv1.JobState_JOB_STATE_SUCCEEDED:
+		return "succeeded"
+	case schedulerv1.JobState_JOB_STATE_FAILED:
+		return "failed"
+	case schedulerv1.JobState_JOB_STATE_DEADLETTER:
+		return "deadletter"
+	case schedulerv1.JobState_JOB_STATE_UNSPECIFIED:
+		// Return empty string to indicate "no filter"
+		return ""
+	default:
+		// Unknown state - return empty to skip filtering
+		return ""
+	}
+}
+
+func priorityToString(priority schedulerv1.Priority) string {
+	switch(priority) {
+	case schedulerv1.Priority_PRIORITY_CRITICAL:
+		return "critical"
+	case schedulerv1.Priority_PRIORITY_LOW:
+		return "low"
+	case schedulerv1.Priority_PRIORITY_HIGH:
+		return "high"
+	case schedulerv1.Priority_PRIORITY_DEFAULT:
+		return "default"
+	case schedulerv1.Priority_PRIORITY_UNSPECIFIED:
+		return ""
+	default:
+		return ""
 	}
 }
 
@@ -412,14 +451,121 @@ func (s *Server) CancelJob(ctx context.Context, req *schedulerv1.CancelJobReques
 
 // ListJobs lists jobs with optional filters
 func (s *Server) ListJobs(ctx context.Context, req *schedulerv1.ListJobsRequest) (*schedulerv1.ListJobsResponse, error) {
-	// TODO: Implement
 	// 1. Build query with filters (state, priority, type)
+	
+	priorityString := priorityToString(req.PriorityFilter)
+
 	// 2. Query CockroachDB with pagination
-	// 3. Convert results to JobStatus messages
-	// 4. Return with next_page_token
+
+	// Handle pagination: default page_size to 50, max 1000
+	pageSize := int(req.PageSize)
+	if pageSize == 0 {
+		pageSize = 50
+	}
+	if pageSize > 1000 {
+		pageSize = 1000
+	}
+
+	// Parse page_token as offset (default to 0)
+	offset := 0
+	if req.PageToken != "" {
+		parsedOffset, err := strconv.Atoi(req.PageToken)
+		if err == nil {
+			offset = parsedOffset
+		}
+	}
+
+	query := "SELECT task_id, type, priority, payload, status, attempts, max_attempts, next_run_at, created_at, updated_at FROM tasks WHERE 1=1"
+	args := []interface{}{}
+	argPos := 1
+
+	// Add state filter
+	if req.StateFilter != schedulerv1.JobState_JOB_STATE_UNSPECIFIED {
+		jobStateString := jobStateToString(req.StateFilter)
+		if jobStateString != "" {
+			query += fmt.Sprintf(" AND status = $%d", argPos)
+			args = append(args, jobStateString)
+			argPos++
+		}
+	}
+
+	// Add priority filter
+	if req.PriorityFilter != schedulerv1.Priority_PRIORITY_UNSPECIFIED {
+		if priorityString != "" {
+			query += fmt.Sprintf(" AND priority = $%d", argPos)
+			args = append(args, priorityString)
+			argPos++
+		}
+	}
+
+	// Add type filter
+	if req.TypeFilter != "" {
+		query += fmt.Sprintf(" AND type = $%d", argPos)
+		args = append(args, req.TypeFilter)
+		argPos++
+	}
+
+	query += " ORDER BY created_at DESC"
+	query += fmt.Sprintf(" LIMIT $%d", argPos)
+	args = append(args, pageSize)
+	argPos++
+	query += fmt.Sprintf(" OFFSET $%d", argPos)
+	args = append(args, offset)
+
+	// 3. Execute query and convert results to JobStatus messages
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to query jobs: %v", err))
+	}
+	defer rows.Close()
+
+	var jobs []*schedulerv1.JobStatus
+	for rows.Next() {
+		var job db.Job
+		var nextRunAt *time.Time
+		err := rows.Scan(
+			&job.TaskID,
+			&job.Type,
+			&job.Priority,
+			&job.PayloadJSON,
+			&job.Status,
+			&job.Attempts,
+			&job.MaxAttempts,
+			&nextRunAt,
+			&job.CreatedAt,
+			&job.UpdatedAt,
+		)
+		if err != nil {
+			return nil, status.Error(codes.Internal, fmt.Sprintf("failed to scan job: %v", err))
+		}
+		// Note: nextRunAt is scanned but not used since JobStatus protobuf doesn't include it
+
+		// Convert to protobuf JobStatus
+		jobStatus := &schedulerv1.JobStatus{
+			JobId:     job.TaskID.String(),
+			State:     statusToJobState(job.Status),
+			Attempts:  int32(job.Attempts),
+			LastError: "",
+			CreatedAt: timestamppb.New(job.CreatedAt),
+			UpdatedAt: timestamppb.New(job.UpdatedAt),
+		}
+		jobs = append(jobs, jobStatus)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("error iterating rows: %v", err))
+	}
+
+	// 4. Generate next_page_token
+	nextPageToken := ""
+	if len(jobs) == pageSize {
+		// There might be more results
+		nextPageToken = strconv.Itoa(offset + pageSize)
+	}
 
 	return &schedulerv1.ListJobsResponse{
-		Jobs: []*schedulerv1.JobStatus{},
+		Jobs:          jobs,
+		NextPageToken: nextPageToken,
 	}, nil
 }
 
