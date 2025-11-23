@@ -15,6 +15,7 @@ import (
 
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/db"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/redis"
+	"github.com/williamntlam/go-grpc-task-scheduler/internal/utils"
 	schedulerv1 "github.com/williamntlam/go-grpc-task-scheduler/proto/scheduler/v1"
 )
 
@@ -33,17 +34,17 @@ func main() {
 	}
 
 	// Get configuration from environment variables
-	grpcPort := getEnv("GRPC_PORT", defaultGRPCPort)
-	metricsPort := getEnv("METRICS_PORT", defaultMetricsPort)
+	grpcPort := utils.GetEnv("GRPC_PORT", defaultGRPCPort)
+	metricsPort := utils.GetEnv("METRICS_PORT", defaultMetricsPort)
 
 	// Initialize CockroachDB connection pool
 	dbConfig := db.Config{
-		Host:     getEnv("COCKROACHDB_HOST", "localhost"),
-		Port:     getEnv("COCKROACHDB_PORT", "26257"),
-		User:     getEnv("COCKROACHDB_USER", "root"),
-		Password: getEnv("COCKROACHDB_PASSWORD", ""),
-		Database: getEnv("COCKROACHDB_DATABASE", "scheduler"),
-		SSLMode:  getEnv("COCKROACHDB_SSLMODE", "disable"),
+		Host:     utils.GetEnv("COCKROACHDB_HOST", "localhost"),
+		Port:     utils.GetEnv("COCKROACHDB_PORT", "26257"),
+		User:     utils.GetEnv("COCKROACHDB_USER", "root"),
+		Password: utils.GetEnv("COCKROACHDB_PASSWORD", ""),
+		Database: utils.GetEnv("COCKROACHDB_DATABASE", "scheduler"),
+		SSLMode:  utils.GetEnv("COCKROACHDB_SSLMODE", "disable"),
 	}
 
 	dbPool, err := db.NewPool(context.Background(), dbConfig)
@@ -59,10 +60,10 @@ func main() {
 	// - Prometheus metrics registry
 
 	redisConfig := redis.Config{
-		Host: getEnv("REDIS_HOST", "localhost"),
-		Port: getEnv("REDIS_PORT", "6379"),
-		Password: getEnv("REDIS_PASSWORD", ""),
-		DB: 0,
+		Host:     utils.GetEnv("REDIS_HOST", "localhost"),
+		Port:     utils.GetEnv("REDIS_PORT", "6379"),
+		Password: utils.GetEnv("REDIS_PASSWORD", ""),
+		DB:       0,
 	}
 
 	redisClient, err := redis.NewClient(context.Background(), redisConfig)
@@ -142,14 +143,6 @@ func waitForShutdown(grpcServer *grpc.Server) {
 	}
 
 	log.Println("Shutdown complete")
-}
-
-// getEnv retrieves an environment variable or returns a default value
-func getEnv(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
 }
 
 // TODO: Implement metrics server
