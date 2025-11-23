@@ -358,10 +358,6 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 
 // CancelJob cancels a running job
 func (s *Server) CancelJob(ctx context.Context, req *schedulerv1.CancelJobRequest) (*schedulerv1.CancelJobResponse, error) {
-	// TODO: Implement
-	// 1. Update task status in CockroachDB to 'cancelled'
-	// 2. Remove from Redis queue/leases if still queued/running
-	// 3. Return success
 
 	jobId, err := uuid.Parse(req.JobId)
 	if err != nil {
