@@ -75,8 +75,6 @@ func PushJob(ctx context.Context, client *redis.Client, jobID uuid.UUID, jobType
 // GetQueueName converts a priority string to the corresponding queue name
 // Returns empty string if priority is invalid
 func GetQueueName(priority string) string {
-	// TODO: Step 4.1 - Implement switch statement
-
 	switch priority {
 	case "critical":
 		return "q:critical"
