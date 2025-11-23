@@ -42,7 +42,7 @@ type JobPayload struct {
 func PushJob(ctx context.Context, client *redis.Client, jobID uuid.UUID, jobType, priority string) error {
 	// TODO: Step 3.1 - Get queue name using getQueueName helper
 	// queueName := getQueueName(priority)
-	queueName := getQueueName(priority)
+	queueName := GetQueueName(priority)
 
 	// TODO: Step 3.2 - Validate queue name (return error if empty)
 	if queueName == "" {
@@ -72,21 +72,9 @@ func PushJob(ctx context.Context, client *redis.Client, jobID uuid.UUID, jobType
 	return nil
 }
 
-// getQueueName converts a priority string to the corresponding queue name
+// GetQueueName converts a priority string to the corresponding queue name
 // Returns empty string if priority is invalid
-//
-// TODO: Step 4 - Implement getQueueName function
-// Function signature: func getQueueName(priority string) string
-//
-// Steps to implement:
-// 1. Use a switch statement on priority
-// 2. Map each priority to its queue name:
-//    - "critical" -> "q:critical"
-//    - "high" -> "q:high"
-//    - "default" -> "q:default"
-//    - "low" -> "q:low"
-// 3. Return empty string for invalid priorities (default case)
-func getQueueName(priority string) string {
+func GetQueueName(priority string) string {
 	// TODO: Step 4.1 - Implement switch statement
 
 	switch priority {

@@ -363,8 +363,54 @@ func (s *Server) CancelJob(ctx context.Context, req *schedulerv1.CancelJobReques
 	// 2. Remove from Redis queue/leases if still queued/running
 	// 3. Return success
 
+	jobId, err := uuid.Parse(req.JobId)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "job_id must be a valid UUID")
+	}
+
+	job, err := db.GetJobByID(ctx, s.db, jobId)
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to get job: %v", err))
+	}
+	if job == nil {
+		return nil, status.Error(codes.NotFound, "job not found")
+	}
+
+	if job.Status == "succeeded" || job.Status == "failed" || job.Status == "deadletter" || job.Status == "cancelled" {
+		return &schedulerv1.CancelJobResponse{
+			Cancelled: false,
+		}, nil
+	}
+
+	cancelled, err := db.CancelJob(ctx, s.db, jobId)
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to cancel job: %v", err))
+	}
+
+	// If job was queued, remove it from Redis queue
+	if cancelled && job.Status == "queued" {
+		// Create the same JSON payload that was pushed to Redis
+		payload := redis.JobPayload{
+			TaskID:   jobId.String(),
+			Type:     job.Type,
+			Priority: job.Priority,
+		}
+		payloadJSON, err := json.Marshal(payload)
+		if err == nil {
+			// Get queue name based on priority
+			queueName := redis.GetQueueName(job.Priority)
+			if queueName != "" {
+				// Remove from Redis queue (LREM removes all matching values)
+				// Log error but don't fail - DB is source of truth, job is already cancelled
+				if err := s.redis.LRem(ctx, queueName, 0, payloadJSON).Err(); err != nil {
+					log.Printf("Warning: failed to remove job %s from Redis queue: %v", jobId.String(), err)
+				}
+			}
+		}
+	}
+
 	return &schedulerv1.CancelJobResponse{
-		Cancelled: false,
+		Cancelled: cancelled,
 	}, nil
 }
 
