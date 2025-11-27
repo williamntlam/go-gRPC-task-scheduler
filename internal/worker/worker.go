@@ -6,8 +6,7 @@ import (
 	"fmt"
 	"log"
 
-	// STEP 1: Add "sync" package import here for WaitGroup and Mutex
-	// "sync"
+	"sync" // STEP 1: Added sync package for WaitGroup and Mutex
 	"time"
 
 	"github.com/google/uuid"
@@ -24,18 +23,17 @@ type Worker struct {
 	redisClient *redisc.Client
 	poolSize    int
 	
-	// STEP 2: Add graceful shutdown fields to the Worker struct:
+	// STEP 2: Graceful shutdown fields
 	// - ctx: A cancellable context.Context to signal shutdown
 	// - cancel: The CancelFunc to cancel the context
 	// - mu: A sync.Mutex to protect concurrent access to stopping flag
 	// - wg: A sync.WaitGroup to track in-flight jobs
 	// - stopping: A bool flag to prevent multiple stop calls
-	// Uncomment and add these fields:
-	// ctx      context.Context
-	// cancel   context.CancelFunc
-	// mu       sync.Mutex
-	// wg       sync.WaitGroup
-	// stopping bool
+	ctx      context.Context
+	cancel   context.CancelFunc
+	mu       sync.Mutex
+	wg       sync.WaitGroup
+	stopping bool
 }
 
 func NewWorker(dbPool *pgxpool.Pool, redisClient *redisc.Client, poolSize int) *Worker {
@@ -51,10 +49,15 @@ func NewWorker(dbPool *pgxpool.Pool, redisClient *redisc.Client, poolSize int) *
 	//     ctx:         ctx,
 	//     cancel:      cancel,
 	// }
+
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return &Worker{
-		dbPool:      dbPool,
+		dbPool: dbPool,
 		redisClient: redisClient,
-		poolSize:    poolSize,
+		poolSize: poolSize,
+		ctx: ctx,
+		cancel: cancel,
 	}
 }
 
