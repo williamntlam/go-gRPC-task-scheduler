@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+
+	// STEP 1: Add "sync" package import here for WaitGroup and Mutex
+	// "sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,9 +23,34 @@ type Worker struct {
 	dbPool      *pgxpool.Pool
 	redisClient *redisc.Client
 	poolSize    int
+	
+	// STEP 2: Add graceful shutdown fields to the Worker struct:
+	// - ctx: A cancellable context.Context to signal shutdown
+	// - cancel: The CancelFunc to cancel the context
+	// - mu: A sync.Mutex to protect concurrent access to stopping flag
+	// - wg: A sync.WaitGroup to track in-flight jobs
+	// - stopping: A bool flag to prevent multiple stop calls
+	// Uncomment and add these fields:
+	// ctx      context.Context
+	// cancel   context.CancelFunc
+	// mu       sync.Mutex
+	// wg       sync.WaitGroup
+	// stopping bool
 }
 
 func NewWorker(dbPool *pgxpool.Pool, redisClient *redisc.Client, poolSize int) *Worker {
+	// STEP 3: Initialize the cancellable context in NewWorker
+	// Use context.WithCancel(context.Background()) to create ctx and cancel
+	// Then include ctx and cancel in the Worker struct initialization
+	// Example:
+	// ctx, cancel := context.WithCancel(context.Background())
+	// return &Worker{
+	//     dbPool:      dbPool,
+	//     redisClient: redisClient,
+	//     poolSize:    poolSize,
+	//     ctx:         ctx,
+	//     cancel:      cancel,
+	// }
 	return &Worker{
 		dbPool:      dbPool,
 		redisClient: redisClient,
@@ -32,20 +60,50 @@ func NewWorker(dbPool *pgxpool.Pool, redisClient *redisc.Client, poolSize int) *
 
 // Start begins processing jobs from Redis queues
 func (w *Worker) Start() {
+	// STEP 4: Change from context.Background() to use w.ctx
+	// Get the worker's context (you'll need to lock/unlock the mutex to read it safely)
+	// Example:
+	// w.mu.Lock()
+	// ctx := w.ctx
+	// w.mu.Unlock()
 	ctx := context.Background()
 
 	for {
+		// STEP 5: Add shutdown check at the start of the loop
+		// Use select with ctx.Done() to check if shutdown was signaled
+		// If ctx.Done() is received, log and return from Start()
+		// Example:
+		// select {
+		// case <-ctx.Done():
+		//     log.Println("Worker received shutdown signal, stopping job processing")
+		//     return
+		// default:
+		// }
+		
 		// Step 1: Pop job from priority queues (blocks until job available or timeout)
 		result, err := w.redisClient.BRPop(ctx, 1*time.Second, "q:critical", "q:high", "q:default", "q:low").Result()
 		
 		// Handle timeout (no jobs available)
 		if err == redisc.Nil {
+			// STEP 6: Check for shutdown signal during timeout
+			// Add a select statement here to check ctx.Done() before continuing
+			// This allows the worker to exit quickly even when no jobs are available
 			continue // Timeout, loop back and try again
 		}
 		
 		// Handle other errors
 		if err != nil {
 			log.Printf("Error popping from queue: %v", err)
+			// STEP 7: Check for shutdown signal before retrying
+			// Replace time.Sleep with a select that checks ctx.Done()
+			// Example:
+			// select {
+			// case <-ctx.Done():
+			//     log.Println("Worker received shutdown signal, stopping job processing")
+			//     return
+			// case <-time.After(1 * time.Second):
+			//     continue
+			// }
 			time.Sleep(1 * time.Second) // Brief pause before retrying
 			continue
 		}
@@ -69,6 +127,10 @@ func (w *Worker) Start() {
 			log.Printf("Invalid job ID: %v", err)
 			continue
 		}
+
+		// STEP 8: Add shutdown check before processing a job
+		// After parsing the job ID but before claiming it, check if shutdown was signaled
+		// If so, log and return (don't process this job)
 
 		// Step 4: Claim job in database (update status to 'running', increment attempts)
 		claimed, err := w.claimJob(ctx, jobID)
@@ -95,6 +157,18 @@ func (w *Worker) Start() {
 			continue
 		}
 
+		// STEP 9: Track in-flight jobs and execute in goroutine
+		// Before executing the handler, call w.wg.Add(1) to increment the WaitGroup
+		// Then execute the handler in a goroutine, and use defer w.wg.Done() to decrement when done
+		// This allows Stop() to wait for all in-flight jobs to complete
+		// Example structure:
+		// w.wg.Add(1)
+		// go func(job *db.Job) {
+		//     defer w.wg.Done()
+		//     handlerErr := w.executeHandler(ctx, job)
+		//     // ... update job status ...
+		// }(job)
+		
 		// Step 6: Execute job handler 
 		handlerErr := w.executeHandler(ctx, job)
 
@@ -112,6 +186,48 @@ func (w *Worker) Start() {
 // Stop gracefully stops the worker
 // This is a skeleton implementation - you'll need to implement graceful shutdown logic
 func (w *Worker) Stop(ctx context.Context) error {
+	// STEP 10: Prevent multiple simultaneous stop calls
+	// Lock the mutex and check if w.stopping is already true
+	// If it is, unlock and return an error
+	// If not, set w.stopping = true
+	// Example:
+	// w.mu.Lock()
+	// if w.stopping {
+	//     w.mu.Unlock()
+	//     return fmt.Errorf("worker is already stopping")
+	// }
+	// w.stopping = true
+	// w.mu.Unlock()
+	
+	// STEP 11: Signal workers to stop processing new jobs
+	// Call w.cancel() to cancel the context
+	// This will cause all ctx.Done() checks in Start() to trigger
+	// Log that you're signaling the worker to stop
+	// Example:
+	// log.Println("Signaling worker to stop processing new jobs...")
+	// w.cancel()
+	
+	// STEP 12: Wait for in-flight jobs to complete (with timeout)
+	// Create a channel: done := make(chan struct{})
+	// Start a goroutine that calls w.wg.Wait() and then closes the done channel
+	// Use select to wait for either:
+	//   - done channel (all jobs completed) -> return nil
+	//   - ctx.Done() (timeout reached) -> return an error with context error
+	// Example:
+	// done := make(chan struct{})
+	// go func() {
+	//     w.wg.Wait()
+	//     close(done)
+	// }()
+	// select {
+	// case <-done:
+	//     log.Println("All in-flight jobs completed")
+	//     return nil
+	// case <-ctx.Done():
+	//     log.Printf("Shutdown timeout reached: %v", ctx.Err())
+	//     return fmt.Errorf("shutdown timeout: %w", ctx.Err())
+	// }
+	
 	// TODO: Implement graceful shutdown
 	// - Signal workers to stop processing new jobs
 	// - Wait for in-flight jobs to complete (with timeout)
