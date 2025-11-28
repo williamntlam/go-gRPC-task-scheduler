@@ -61,6 +61,16 @@ func NewWorker(dbPool *pgxpool.Pool, redisClient *redisc.Client, poolSize int) *
 	}
 }
 
+// checkShutdown checks if the context has been cancelled and logs if so.
+// Returns true if shutdown was detected, false otherwise.
+func (w *Worker) checkShutdown(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		log.Println("Worker received shutdown signal, stopping job processing")
+		return true
+	}
+	return false
+}
+
 // Start begins processing jobs from Redis queues
 func (w *Worker) Start() {
 	// STEP 4: Change from context.Background() to use w.ctx
@@ -69,7 +79,9 @@ func (w *Worker) Start() {
 	// w.mu.Lock()
 	// ctx := w.ctx
 	// w.mu.Unlock()
-	ctx := context.Background()
+	w.mu.Lock()
+	ctx := w.ctx
+	w.mu.Unlock()
 
 	for {
 		// STEP 5: Add shutdown check at the start of the loop
@@ -82,6 +94,10 @@ func (w *Worker) Start() {
 		//     return
 		// default:
 		// }
+
+		if w.checkShutdown(ctx) {
+			return
+		}
 		
 		// Step 1: Pop job from priority queues (blocks until job available or timeout)
 		result, err := w.redisClient.BRPop(ctx, 1*time.Second, "q:critical", "q:high", "q:default", "q:low").Result()
@@ -91,6 +107,10 @@ func (w *Worker) Start() {
 			// STEP 6: Check for shutdown signal during timeout
 			// Add a select statement here to check ctx.Done() before continuing
 			// This allows the worker to exit quickly even when no jobs are available
+			if w.checkShutdown(ctx) {
+				return
+			}
+
 			continue // Timeout, loop back and try again
 		}
 		
@@ -107,7 +127,11 @@ func (w *Worker) Start() {
 			// case <-time.After(1 * time.Second):
 			//     continue
 			// }
-			time.Sleep(1 * time.Second) // Brief pause before retrying
+			
+			if w.checkShutdown(ctx) {
+				return
+			}
+
 			continue
 		}
 
@@ -134,6 +158,10 @@ func (w *Worker) Start() {
 		// STEP 8: Add shutdown check before processing a job
 		// After parsing the job ID but before claiming it, check if shutdown was signaled
 		// If so, log and return (don't process this job)
+
+		if w.checkShutdown(ctx) {
+			return
+		}
 
 		// Step 4: Claim job in database (update status to 'running', increment attempts)
 		claimed, err := w.claimJob(ctx, jobID)
@@ -171,18 +199,22 @@ func (w *Worker) Start() {
 		//     handlerErr := w.executeHandler(ctx, job)
 		//     // ... update job status ...
 		// }(job)
-		
-		// Step 6: Execute job handler 
-		handlerErr := w.executeHandler(ctx, job)
 
-		// Step 7: Update job status based on result
-		if handlerErr != nil {
-			log.Printf("Job %s failed: %v", jobID, handlerErr)
-			w.handleJobFailure(ctx, job, handlerErr)
-		} else {
-			log.Printf("Job %s completed successfully", jobID)
-			w.markJobSucceeded(ctx, jobID)
-		}
+		// Step 6: Execute job handler in goroutine and update status
+		w.wg.Add(1)
+		go func(job *db.Job) {
+			defer w.wg.Done()
+			handlerErr := w.executeHandler(ctx, job)
+
+			// Step 7: Update job status based on result
+			if handlerErr != nil {
+				log.Printf("Job %s failed: %v", job.TaskID, handlerErr)
+				w.handleJobFailure(ctx, job, handlerErr)
+			} else {
+				log.Printf("Job %s completed successfully", job.TaskID)
+				w.markJobSucceeded(ctx, job.TaskID)
+			}
+		}(job)
 	}
 }
 
