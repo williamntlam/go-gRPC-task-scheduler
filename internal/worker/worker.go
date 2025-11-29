@@ -309,20 +309,61 @@ func (w *Worker) markJobFailed(ctx context.Context, jobID uuid.UUID, errorMsg st
 	return nil
 }
 
+// markJobRetry updates job status to 'retry' and sets next_run_at for retry scheduling
+func (w *Worker) markJobRetry(ctx context.Context, jobID uuid.UUID, errorMsg string, nextRunAt time.Time) error {
+	query := `
+		UPDATE tasks 
+		SET status = 'retry', next_run_at = $2, updated_at = now()
+		WHERE task_id = $1
+	`
+	
+	_, err := w.dbPool.Exec(ctx, query, jobID, nextRunAt)
+	if err != nil {
+		return fmt.Errorf("failed to mark job as retry: %w", err)
+	}
+	
+	return nil
+}
+
 // handleJobFailure handles job failure, checking if retry is needed
 func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
-	// Check if we should retry
-	if job.Attempts < job.MaxAttempts {
-		// TODO: Calculate exponential backoff and set next_run_at
-		// For now, just mark as failed
-		log.Printf("Job %s failed (attempt %d/%d), will retry later", job.TaskID, job.Attempts, job.MaxAttempts)
-		// TODO: Update status to 'retry' and set next_run_at
-		w.markJobFailed(ctx, job.TaskID, err.Error())
-	} else {
-		// Max attempts reached, mark as failed
+	// STEP 1: Check if job should be retried
+	// Compare job.Attempts with job.MaxAttempts
+	// If job.Attempts < job.MaxAttempts, we should retry
+	// Otherwise, mark as permanently failed
+	if job.Attempts >= job.MaxAttempts {
+		// Max attempts reached, mark as permanently failed
 		log.Printf("Job %s failed after %d attempts, marking as failed", job.TaskID, job.Attempts)
 		w.markJobFailed(ctx, job.TaskID, err.Error())
-	}
+		return
+	} 
+
+	// STEP 2: If retry is needed (attempts < max attempts):
+	//   a. Calculate exponential backoff delay
+	//      - Formula: delay = baseDelay * (2 ^ (attempts - 1))
+	//      - Use time.Duration for the delay (e.g., 1 second, 2 seconds, 4 seconds, 8 seconds...)
+	//      - Example: baseDelay = 1 * time.Second
+	//      - For attempt 1: 1s, attempt 2: 2s, attempt 3: 4s, attempt 4: 8s
+	//   b. Calculate next_run_at = current time + delay
+	//      - Use time.Now() to get current time
+	//      - Add the calculated delay to get next_run_at
+	//   c. Log that the job will be retried with attempt count
+	//      - Use log.Printf with job.TaskID, job.Attempts, job.MaxAttempts
+	//   d. Call a helper function to update job status to 'retry' with next_run_at
+	//      - You'll need to create markJobRetry() function (similar to markJobSucceeded/markJobFailed)
+	//      - Pass: ctx, job.TaskID, error message, and next_run_at time
+
+	// Calculate exponential backoff: baseDelay * 2^(attempts-1)
+	// Use bit shifting for powers of 2: 1 << (attempts-1) = 2^(attempts-1)
+	baseDelay := 1 * time.Second
+	delay := baseDelay * time.Duration(1<<(job.Attempts-1))
+	
+	nextRunAt := time.Now().Add(delay)
+	job.NextRunAt = &nextRunAt
+	
+	log.Printf("Job %s failed (attempt %d/%d), will retry later at %s", job.TaskID, job.Attempts, job.MaxAttempts, nextRunAt.Format(time.RFC3339))
+	w.markJobRetry(ctx, job.TaskID, err.Error(), nextRunAt)
+
 }
 
 // executeHandler executes the job handler based on job type
