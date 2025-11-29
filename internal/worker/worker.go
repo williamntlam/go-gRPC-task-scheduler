@@ -219,55 +219,38 @@ func (w *Worker) Start() {
 }
 
 // Stop gracefully stops the worker
-// This is a skeleton implementation - you'll need to implement graceful shutdown logic
 func (w *Worker) Stop(ctx context.Context) error {
 	// STEP 10: Prevent multiple simultaneous stop calls
-	// Lock the mutex and check if w.stopping is already true
-	// If it is, unlock and return an error
-	// If not, set w.stopping = true
-	// Example:
-	// w.mu.Lock()
-	// if w.stopping {
-	//     w.mu.Unlock()
-	//     return fmt.Errorf("worker is already stopping")
-	// }
-	// w.stopping = true
-	// w.mu.Unlock()
+
+	w.mu.Lock()
+	if w.stopping {
+		w.mu.Unlock()
+		return fmt.Errorf("worker is already in the process of stopping")
+	}
+	w.stopping = true
+	w.mu.Unlock()
 	
 	// STEP 11: Signal workers to stop processing new jobs
-	// Call w.cancel() to cancel the context
-	// This will cause all ctx.Done() checks in Start() to trigger
-	// Log that you're signaling the worker to stop
-	// Example:
-	// log.Println("Signaling worker to stop processing new jobs...")
-	// w.cancel()
+
+	log.Println("Signaling worker to stop processing new jobs.")
+	w.cancel()
 	
 	// STEP 12: Wait for in-flight jobs to complete (with timeout)
-	// Create a channel: done := make(chan struct{})
-	// Start a goroutine that calls w.wg.Wait() and then closes the done channel
-	// Use select to wait for either:
-	//   - done channel (all jobs completed) -> return nil
-	//   - ctx.Done() (timeout reached) -> return an error with context error
-	// Example:
-	// done := make(chan struct{})
-	// go func() {
-	//     w.wg.Wait()
-	//     close(done)
-	// }()
-	// select {
-	// case <-done:
-	//     log.Println("All in-flight jobs completed")
-	//     return nil
-	// case <-ctx.Done():
-	//     log.Printf("Shutdown timeout reached: %v", ctx.Err())
-	//     return fmt.Errorf("shutdown timeout: %w", ctx.Err())
-	// }
 	
-	// TODO: Implement graceful shutdown
-	// - Signal workers to stop processing new jobs
-	// - Wait for in-flight jobs to complete (with timeout)
-	// - Clean up resources
-	return nil
+	done := make(chan struct{})
+	go func() {
+		w.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Printf("All in-flight jobs completed")
+		return nil
+	case <-ctx.Done():
+		log.Printf("Shutdown timeout reached: %v", ctx.Err())
+		return fmt.Errorf("shutdown timeout: %w", ctx.Err())
+	}
 }
 
 // claimJob atomically updates job status to 'running' and increments attempts
