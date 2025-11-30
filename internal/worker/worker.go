@@ -85,6 +85,9 @@ func (w *Worker) Start() {
 	ctx := w.ctx
 	w.mu.Unlock()
 
+	// Start reaper process to recover stuck jobs from processing queue
+	go w.reaper(ctx)
+
 	for {
 		// STEP 5: Add shutdown check at the start of the loop
 		// Use select with ctx.Done() to check if shutdown was signaled
@@ -277,6 +280,132 @@ func (w *Worker) Stop(ctx context.Context) error {
 	case <-ctx.Done():
 		log.Printf("Shutdown timeout reached: %v", ctx.Err())
 		return fmt.Errorf("shutdown timeout: %w", ctx.Err())
+	}
+}
+
+// reaper periodically checks the processing queue for stuck jobs and moves them back to pending queues
+// A job is considered "stuck" if it's been in the processing queue longer than the timeout (default: 5 minutes)
+func (w *Worker) reaper(ctx context.Context) {
+	processingQueue := "q:processing"
+	stuckJobTimeout := 5 * time.Minute // Jobs stuck longer than this will be recovered
+	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
+	defer ticker.Stop()
+
+	log.Println("Reaper process started: monitoring processing queue for stuck jobs")
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Reaper process stopping")
+			return
+		case <-ticker.C:
+			w.recoverStuckJobs(ctx, processingQueue, stuckJobTimeout)
+		}
+	}
+}
+
+// recoverStuckJobs checks the processing queue and moves stuck jobs back to their original priority queues
+func (w *Worker) recoverStuckJobs(ctx context.Context, processingQueue string, timeout time.Duration) {
+	// Get all items from processing queue
+	items, err := w.redisClient.LRange(ctx, processingQueue, 0, -1).Result()
+	if err != nil {
+		log.Printf("Reaper: Error reading processing queue: %v", err)
+		return
+	}
+
+	if len(items) == 0 {
+		return // No jobs in processing queue
+	}
+
+	recoveredCount := 0
+	for _, itemJSON := range items {
+		// Parse job payload to get priority
+		var jobPayload redis.JobPayload
+		if err := json.Unmarshal([]byte(itemJSON), &jobPayload); err != nil {
+			log.Printf("Reaper: Failed to parse job payload, removing invalid job: %v", err)
+			// Remove invalid job from processing queue
+			w.redisClient.LRem(ctx, processingQueue, 1, itemJSON)
+			continue
+		}
+
+		// Check if job is actually stuck by checking database status
+		// If job status is 'running' and it's been there a while, it might be stuck
+		// For simplicity, we'll move all jobs in processing queue back if they're not actively being processed
+		// A more sophisticated approach would track when jobs entered processing queue
+		
+		// Get the original priority queue name
+		originalQueue := redis.GetQueueName(jobPayload.Priority)
+		if originalQueue == "" {
+			log.Printf("Reaper: Invalid priority %s for job %s, removing from processing queue", jobPayload.Priority, jobPayload.TaskID)
+			w.redisClient.LRem(ctx, processingQueue, 1, itemJSON)
+			continue
+		}
+
+		// Check job status in database
+		jobID, err := uuid.Parse(jobPayload.TaskID)
+		if err != nil {
+			log.Printf("Reaper: Invalid job ID %s, removing from processing queue", jobPayload.TaskID)
+			w.redisClient.LRem(ctx, processingQueue, 1, itemJSON)
+			continue
+		}
+
+		// Check if job is still in 'running' status (might be stuck)
+		// If status changed, another worker might have handled it
+		job, err := db.GetJobByID(ctx, w.dbPool, jobID)
+		if err != nil {
+			log.Printf("Reaper: Error checking job %s status: %v", jobID, err)
+			// Move back to original queue on error
+			w.moveJobBackToQueue(ctx, processingQueue, originalQueue, itemJSON)
+			recoveredCount++
+			continue
+		}
+
+		if job == nil {
+			// Job doesn't exist in database, remove from processing queue
+			log.Printf("Reaper: Job %s not found in database, removing from processing queue", jobID)
+			w.redisClient.LRem(ctx, processingQueue, 1, itemJSON)
+			continue
+		}
+
+		// If job is still 'running' and has been running for a while, it might be stuck
+		// Check if job has been running longer than timeout
+		if job.Status == "running" {
+			// Check how long job has been running (using updated_at as proxy)
+			timeSinceUpdate := time.Since(job.UpdatedAt)
+			if timeSinceUpdate > timeout {
+				log.Printf("Reaper: Recovering stuck job %s (running for %v), moving back to %s", jobID, timeSinceUpdate, originalQueue)
+				w.moveJobBackToQueue(ctx, processingQueue, originalQueue, itemJSON)
+				recoveredCount++
+			}
+		} else if job.Status == "queued" {
+			// Job status changed back to queued (shouldn't happen, but recover it)
+			log.Printf("Reaper: Job %s status is queued but in processing queue, moving back to %s", jobID, originalQueue)
+			w.moveJobBackToQueue(ctx, processingQueue, originalQueue, itemJSON)
+			recoveredCount++
+		}
+		// If job status is 'succeeded', 'failed', or 'retry', remove from processing queue
+		// (should have been removed by worker, but clean up if not)
+		if job.Status == "succeeded" || job.Status == "failed" || job.Status == "retry" {
+			log.Printf("Reaper: Cleaning up completed job %s from processing queue (status: %s)", jobID, job.Status)
+			w.redisClient.LRem(ctx, processingQueue, 1, itemJSON)
+		}
+	}
+
+	if recoveredCount > 0 {
+		log.Printf("Reaper: Recovered %d stuck job(s) from processing queue", recoveredCount)
+	}
+}
+
+// moveJobBackToQueue atomically moves a job from processing queue back to its original priority queue
+func (w *Worker) moveJobBackToQueue(ctx context.Context, processingQueue, targetQueue, jobJSON string) {
+	// Use LMOVE to atomically move the job
+	// LMOVE processingQueue targetQueue RIGHT LEFT (move from right of source to left of target)
+	err := w.redisClient.LMove(ctx, processingQueue, targetQueue, "RIGHT", "LEFT").Err()
+	if err != nil {
+		// Fallback: manual move if LMOVE fails
+		log.Printf("Reaper: LMOVE failed, using manual move: %v", err)
+		w.redisClient.LPush(ctx, targetQueue, jobJSON)
+		w.redisClient.LRem(ctx, processingQueue, 1, jobJSON)
 	}
 }
 
