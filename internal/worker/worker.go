@@ -101,52 +101,56 @@ func (w *Worker) Start() {
 			return
 		}
 		
-		// Step 1: Pop job from priority queues (blocks until job available or timeout)
-		result, err := w.redisClient.BRPop(ctx, 1*time.Second, "q:critical", "q:high", "q:default", "q:low").Result()
+		// Step 1: Reliable queue pattern - atomically move job from pending to processing queue
+		// Use BRPOPLPUSH to pop from priority queues and push to processing queue in one atomic operation
+		// This prevents job loss if worker crashes between pop and claim
+		processingQueue := "q:processing"
+		var jobPayloadJSON string
+		var sourceQueue string
 		
-		// Handle timeout (no jobs available)
-		if err == redisc.Nil {
-			// STEP 6: Check for shutdown signal during timeout
-			// Add a select statement here to check ctx.Done() before continuing
-			// This allows the worker to exit quickly even when no jobs are available
+		// Try each priority queue in order (critical -> high -> default -> low)
+		priorityQueues := []string{"q:critical", "q:high", "q:default", "q:low"}
+		found := false
+		
+		for _, queue := range priorityQueues {
 			if w.checkShutdown(ctx) {
 				return
 			}
-
-			continue // Timeout, loop back and try again
-		}
-		
-		// Handle other errors
-		if err != nil {
-			log.Printf("Error popping from queue: %v", err)
-			// STEP 7: Check for shutdown signal before retrying
-			// Replace time.Sleep with a select that checks ctx.Done()
-			// Example:
-			// select {
-			// case <-ctx.Done():
-			//     log.Println("Worker received shutdown signal, stopping job processing")
-			//     return
-			// case <-time.After(1 * time.Second):
-			//     continue
-			// }
 			
+			// BRPOPLPUSH: atomically pops from source queue and pushes to processing queue
+			// Blocks for up to 1 second per queue
+			result := w.redisClient.BRPopLPush(ctx, queue, processingQueue, 1*time.Second)
+			if err := result.Err(); err != nil {
+				if err == redisc.Nil {
+					// Queue is empty, try next queue
+					continue
+				}
+				log.Printf("Error in BRPOPLPUSH from %s: %v", queue, err)
+				continue
+			}
+			
+			// Successfully moved job to processing queue
+			jobPayloadJSON = result.Val()
+			sourceQueue = queue
+			found = true
+			break
+		}
+		
+		// If no job found in any queue, check for shutdown and continue
+		if !found {
 			if w.checkShutdown(ctx) {
 				return
 			}
-
-			continue
+			continue // No jobs available, loop back
 		}
 
-		// Step 2: Parse job payload JSON from result[1]
-		// result[0] = queue name, result[1] = job payload JSON
-		if len(result) < 2 {
-			log.Printf("Invalid result from BRPOP: %v", result)
-			continue
-		}
-
+		// Step 2: Parse job payload JSON
 		var jobPayload redis.JobPayload
-		if err := json.Unmarshal([]byte(result[1]), &jobPayload); err != nil {
+		if err := json.Unmarshal([]byte(jobPayloadJSON), &jobPayload); err != nil {
 			log.Printf("Failed to unmarshal job payload: %v", err)
+			// Move job back to original queue on parse error
+			w.redisClient.LPush(ctx, sourceQueue, jobPayloadJSON)
+			w.redisClient.LRem(ctx, processingQueue, 1, jobPayloadJSON)
 			continue
 		}
 
@@ -154,6 +158,8 @@ func (w *Worker) Start() {
 		jobID, err := uuid.Parse(jobPayload.TaskID)
 		if err != nil {
 			log.Printf("Invalid job ID: %v", err)
+			// Remove invalid job from processing queue (data corruption, don't retry)
+			w.redisClient.LRem(ctx, processingQueue, 1, jobPayloadJSON)
 			continue
 		}
 
@@ -169,12 +175,16 @@ func (w *Worker) Start() {
 		claimed, err := w.claimJob(ctx, jobID)
 		if err != nil {
 			log.Printf("Failed to claim job %s: %v", jobID, err)
+			// Move job back to original queue and remove from processing queue
+			w.redisClient.LPush(ctx, sourceQueue, jobPayloadJSON)
+			w.redisClient.LRem(ctx, processingQueue, 1, jobPayloadJSON)
 			continue
 		}
 		if !claimed {
-			
 			// Job was already claimed by another worker or doesn't exist
 			log.Printf("Job %s was not available to claim (may have been claimed by another worker)", jobID)
+			// Remove from processing queue (another worker is handling it)
+			w.redisClient.LRem(ctx, processingQueue, 1, jobPayloadJSON)
 			continue
 		}
 
@@ -183,10 +193,14 @@ func (w *Worker) Start() {
 		if err != nil {
 			log.Printf("Failed to get job %s: %v", jobID, err)
 			w.markJobFailed(ctx, jobID, fmt.Sprintf("Failed to get job: %v", err))
+			// Remove from processing queue
+			w.redisClient.LRem(ctx, processingQueue, 1, jobPayloadJSON)
 			continue
 		}
 		if job == nil {
 			log.Printf("Job %s not found in database", jobID)
+			// Remove from processing queue
+			w.redisClient.LRem(ctx, processingQueue, 1, jobPayloadJSON)
 			continue
 		}
 
@@ -204,19 +218,30 @@ func (w *Worker) Start() {
 
 		// Step 6: Execute job handler in goroutine and update status
 		w.wg.Add(1)
-		go func(job *db.Job) {
+		go func(job *db.Job, payloadJSON string, originalQueue string) {
 			defer w.wg.Done()
+			
+			// Clean up processing queue after job completes (success or failure)
+			defer func() {
+				// Remove job from processing queue
+				w.redisClient.LRem(ctx, processingQueue, 1, payloadJSON)
+			}()
+			
 			handlerErr := w.executeHandler(ctx, job)
 
 			// Step 7: Update job status based on result
 			if handlerErr != nil {
 				log.Printf("Job %s failed: %v", job.TaskID, handlerErr)
 				w.handleJobFailure(ctx, job, handlerErr)
+				// Note: Job remains in processing queue until defer removes it
+				// If retry is needed, handleJobFailure will update next_run_at in DB
+				// A separate process can monitor processing queue for stuck jobs
 			} else {
 				log.Printf("Job %s completed successfully", job.TaskID)
 				w.markJobSucceeded(ctx, job.TaskID)
+				// Job will be removed from processing queue by defer
 			}
-		}(job)
+		}(job, jobPayloadJSON, sourceQueue)
 	}
 }
 
