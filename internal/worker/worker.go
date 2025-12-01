@@ -369,7 +369,8 @@ func (w *Worker) recoverStuckJobs(ctx context.Context, processingQueue string, t
 
 		// If job is still 'running' and has been running for a while, it might be stuck
 		// Check if job has been running longer than timeout
-		if job.Status == "running" {
+		switch job.Status {
+		case "running":
 			// Check how long job has been running (using updated_at as proxy)
 			timeSinceUpdate := time.Since(job.UpdatedAt)
 			if timeSinceUpdate > timeout {
@@ -377,15 +378,14 @@ func (w *Worker) recoverStuckJobs(ctx context.Context, processingQueue string, t
 				w.moveJobBackToQueue(ctx, processingQueue, originalQueue, itemJSON)
 				recoveredCount++
 			}
-		} else if job.Status == "queued" {
+		case "queued":
 			// Job status changed back to queued (shouldn't happen, but recover it)
 			log.Printf("Reaper: Job %s status is queued but in processing queue, moving back to %s", jobID, originalQueue)
 			w.moveJobBackToQueue(ctx, processingQueue, originalQueue, itemJSON)
 			recoveredCount++
-		}
-		// If job status is 'succeeded', 'failed', or 'retry', remove from processing queue
-		// (should have been removed by worker, but clean up if not)
-		if job.Status == "succeeded" || job.Status == "failed" || job.Status == "retry" {
+		case "succeeded", "failed", "retry":
+			// If job status is 'succeeded', 'failed', or 'retry', remove from processing queue
+			// (should have been removed by worker, but clean up if not)
 			log.Printf("Reaper: Cleaning up completed job %s from processing queue (status: %s)", jobID, job.Status)
 			w.redisClient.LRem(ctx, processingQueue, 1, itemJSON)
 		}
@@ -462,6 +462,7 @@ func (w *Worker) markJobFailed(ctx context.Context, jobID uuid.UUID, errorMsg st
 		return fmt.Errorf("failed to mark job as failed: %w", err)
 	}
 	
+	log.Printf("Job %s marked as failed: %s", jobID, errorMsg)
 	return nil
 }
 
@@ -478,6 +479,7 @@ func (w *Worker) markJobRetry(ctx context.Context, jobID uuid.UUID, errorMsg str
 		return fmt.Errorf("failed to mark job as retry: %w", err)
 	}
 	
+	log.Printf("Job %s marked for retry at %s (error: %s)", jobID, nextRunAt.Format(time.RFC3339), errorMsg)
 	return nil
 }
 
