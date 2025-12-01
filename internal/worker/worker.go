@@ -632,41 +632,4 @@ func (w *Worker) executeHandler(ctx context.Context, job *db.Job) error {
 	default:
 		return fmt.Errorf("unknown job type: %s", job.Type)
 	}
-	// STEP 2: Implement "noop" handler case (no operation - for testing)
-	//   a. Add case "noop": in your switch statement
-	//   b. Log: log.Printf("Executing noop handler for job %s", job.TaskID)
-	//   c. Return nil (success) - this handler does nothing, just for testing
-	
-	// STEP 3: Handle unknown/default case
-	//   a. Add default: case in switch statement
-	//   b. Return error: return fmt.Errorf("unknown job type: %s", job.Type)
-	//   This catches any job types that don't have a handler implemented
-	
-	// STEP 4: (Future) To add more handlers, add new cases to the switch:
-	//   Example for "http_call":
-	//   case "http_call":
-	//       // a. Parse job.PayloadJSON to extract URL, method, headers, body
-	//       //    Use json.Unmarshal to parse into a struct
-	//       // b. Create HTTP request using http.NewRequest or http.Client
-	//       // c. Execute the request
-	//       // d. Check response status code
-	//       // e. Return error if status code indicates failure, nil if success
-	//   
-	//   Example for "db_tx":
-	//   case "db_tx":
-	//       // a. Parse job.PayloadJSON to extract SQL query and parameters
-	//       // b. Begin transaction: w.dbPool.Begin(ctx)
-	//       // c. Execute query within transaction
-	//       // d. Commit transaction if successful, rollback on error
-	//       // e. Return error if failed, nil if succeeded
-	//   
-	//   Each handler should:
-	//     - Parse job.PayloadJSON using json.Unmarshal
-	//     - Execute the handler-specific logic
-	//     - Handle errors appropriately
-	//     - Return error if failed, nil if succeeded
-	
-	// TODO: Implement the switch statement and handlers as described above
-	// For now, return error for unknown type (you'll replace this with your implementation)
-	
 }
