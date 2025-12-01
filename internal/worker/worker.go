@@ -590,25 +590,45 @@ func (w *Worker) executeHandler(ctx context.Context, job *db.Job) error {
 
 		return nil
 	case "db_tx":
-		// STEP 1: Define a struct to parse the database transaction payload
-		// Example: type DBTxPayload struct { Query string, Params []interface{} }
-		// Parse job.PayloadJSON into this struct using json.Unmarshal
-		
-		// STEP 2: Begin database transaction
-		// Use w.dbPool.Begin(ctx) to start a transaction
-		// This returns a pgx.Tx object
-		
-		// STEP 3: Execute query within transaction
-		// Use tx.Exec(ctx, query, params...) or tx.QueryRow(ctx, query, params...)
-		// Based on the parsed payload
-		
-		// STEP 4: Commit or rollback
-		// If successful: call tx.Commit(ctx)
-		// If error: call tx.Rollback(ctx) and return the error
-		// Return nil if commit succeeds
-		
 		log.Printf("Executing db_tx handler for job %s", job.TaskID)
-		return fmt.Errorf("db_tx handler not yet implemented")
+		
+		type DBTxPayload struct {
+			Query  string        `json:"query"`
+			Params []interface{} `json:"params"`
+		}
+
+		var payload DBTxPayload
+		if err := json.Unmarshal(job.PayloadJSON, &payload); err != nil {
+			return fmt.Errorf("failed to parse db_tx payload: %w", err)
+		}
+
+		if payload.Query == "" {
+			return fmt.Errorf("db_tx payload missing required field: query")
+		}
+
+		tx, err := w.dbPool.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to begin database transaction: %w", err)
+		}
+
+		// Defer rollback - will be no-op if commit succeeds
+		defer func() {
+			if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+				// Ignore rollback errors after successful commit
+				// Only log if it's an unexpected error
+			}
+		}()
+
+		_, err = tx.Exec(ctx, payload.Query, payload.Params...)
+		if err != nil {
+			return fmt.Errorf("failed to execute database query: %w", err)
+		}
+
+		if err = tx.Commit(ctx); err != nil {
+			return fmt.Errorf("failed to commit database transaction: %w", err)
+		}
+
+		return nil
 	default:
 		return fmt.Errorf("unknown job type: %s", job.Type)
 	}
