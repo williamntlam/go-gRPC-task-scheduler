@@ -820,6 +820,69 @@ func (w *Worker) processRetryJobs(ctx context.Context) {
 	}
 }
 
+// requeueRetryJob atomically updates job status from 'retry' to 'queued' and pushes it back to Redis queue
 func (w *Worker) requeueRetryJob(ctx context.Context, jobID uuid.UUID, jobType, priority string, payloadJSON json.RawMessage) error {
+	// STEP 1: Update database status atomically from 'retry' to 'queued'
+	// Use UPDATE with WHERE clause to ensure atomicity and prevent race conditions
+	// Only update if status is still 'retry' (prevents double-processing if multiple workers run)
+	// Query should:
+	//   - UPDATE tasks SET status = 'queued', updated_at = now()
+	//   - WHERE task_id = $1 AND status = 'retry'
+	//   - RETURNING task_id (to verify update succeeded)
+	// Example query:
+	//   UPDATE tasks 
+	//   SET status = 'queued', updated_at = now()
+	//   WHERE task_id = $1 AND status = 'retry'
+	//   RETURNING task_id
+
+	query := `
+		UPDATE tasks
+		SET status = 'queued', updated_at = now()
+		WHERE task_id = $1 AND status = 'retry'
+		RETURNING task_id
+	`
+
+	// STEP 2: Execute the UPDATE query
+	// Use w.dbPool.QueryRow(ctx, query, jobID) to execute
+	// Scan the returned task_id to verify the update succeeded
+	// Handle errors:
+	//   - If pgx.ErrNoRows: job was already processed by another worker (not an error, return nil)
+	//   - Other errors: return wrapped error
+	// Example: var updatedTaskID uuid.UUID
+	//          err := w.dbPool.QueryRow(ctx, query, jobID).Scan(&updatedTaskID)
+	//          if err == pgx.ErrNoRows { return nil } // Already processed
+	//          if err != nil { return fmt.Errorf("failed to update job: %w", err) }
+
+	var updatedTaskID uuid.UUID
+	err := w.dbPool.QueryRow(ctx, query, jobID).Scan(&updatedTaskID)
+
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil
+		}
+		return fmt.Errorf("failed to update job: %w", err)
+	}
 	
+	// STEP 3: Push job to Redis queue using the helper function
+	// Use redis.PushJob() which handles:
+	//   - Getting queue name from priority
+	//   - Validating queue name
+	//   - Creating JobPayload struct
+	//   - Marshaling to JSON
+	//   - Pushing to Redis with LPUSH
+	// This avoids duplicating code that already exists in redis.PushJob()
+	// Note: Even if Redis push fails, the DB is already updated to 'queued'
+	// This is acceptable - the job will be in DB and can be picked up later
+	// Example: if err := redis.PushJob(ctx, w.redisClient, jobID, jobType, priority); err != nil {
+	//              return fmt.Errorf("failed to push job to redis: %w", err)
+	//          }
+
+	if err := redis.PushJob(ctx, w.redisClient, jobID, jobType, priority); err != nil {
+		return fmt.Errorf("failed to push job to redis: %w", err)
+	}
+
+	// STEP 7: Return nil on success
+	// If all steps succeeded, return nil
+	// Example: return nil
+	return nil
 }
