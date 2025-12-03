@@ -87,6 +87,7 @@ func (w *Worker) Start() {
 
 	// Start reaper process to recover stuck jobs from processing queue
 	go w.reaper(ctx)
+	go w.retryPump(ctx)
 
 	for {
 		// STEP 5: Add shutdown check at the start of the loop
@@ -634,8 +635,54 @@ func (w *Worker) executeHandler(ctx context.Context, job *db.Job) error {
 	}
 }
 
+// retryPump periodically checks the database for jobs with status='retry' and next_run_at <= now()
+// and moves them back to Redis priority queues for reprocessing
 func (w *Worker) retryPump(ctx context.Context) {
+	// STEP 1: Create a ticker that fires every 500ms
+	// Use time.NewTicker(500 * time.Millisecond)
+	// This will check for retry jobs 2 times per second
+	// Example: ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(500 * time.Millisecond)
 
+	// STEP 2: Defer ticker cleanup
+	// Always defer ticker.Stop() to prevent resource leaks
+	// This ensures the ticker is stopped when the function returns
+	// Example: defer ticker.Stop()
+
+	defer ticker.Stop()
+	// STEP 3: Log that retry pump started
+	// Use log.Println() to indicate the retry pump process has started
+	// Example: log.Println("Retry pump started: monitoring for retry jobs")
+
+	log.Println("Retry pump started: monitoring for retry jobs")
+
+	// STEP 4: Create infinite loop with select statement
+	// Use for { select { ... } } pattern (same as reaper function)
+	// This allows us to handle both ticker events and shutdown signals
+
+	// STEP 4.1: Handle shutdown signal
+		// case <-ctx.Done():
+		//   - Log that retry pump is stopping
+		//   - Return from function to exit gracefully
+		//   - Example: log.Println("Retry pump stopping")
+		//   - Example: return
+
+		// STEP 4.2: Handle ticker event
+		// case <-ticker.C:
+		//   - Call w.processRetryJobs(ctx) to process retry jobs
+		//   - This function will query DB and requeue jobs
+		//   - Example: w.processRetryJobs(ctx)
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Retry pump stopping")
+			return
+		case <-ticker.C:
+			w.processRetryJobs(ctx)
+		}
+	}
+	
 }
 
 func (w *Worker) processRetryJobs(ctx context.Context) {
