@@ -633,3 +633,15 @@ func (w *Worker) executeHandler(ctx context.Context, job *db.Job) error {
 		return fmt.Errorf("unknown job type: %s", job.Type)
 	}
 }
+
+func (w *Worker) retryPump(ctx context.Context) {
+
+}
+
+func (w *Worker) processRetryJobs(ctx context.Context) {
+
+}
+
+func (w *Worker) requeueRetryJob(ctx context.Context, jobId uuid.UUID) {
+	
+}
