@@ -685,10 +685,141 @@ func (w *Worker) retryPump(ctx context.Context) {
 	
 }
 
+// processRetryJobs queries the database for jobs ready to be retried and requeues them
 func (w *Worker) processRetryJobs(ctx context.Context) {
+	// STEP 1: Build SQL query to find retry jobs that are ready
+	// Query should:
+	//   - Select: task_id, type, priority, payload, attempts, max_attempts
+	//   - Filter: status = 'retry' AND next_run_at IS NOT NULL AND next_run_at <= now()
+	//   - Order by: next_run_at ASC (process oldest first)
+	//   - Limit: 100 (to avoid processing too many at once)
+	// Example query:
+	//   SELECT task_id, type, priority, payload, attempts, max_attempts
+	//   FROM tasks
+	//   WHERE status = 'retry' AND next_run_at IS NOT NULL AND next_run_at <= now()
+	//   ORDER BY next_run_at ASC
+	//   LIMIT 100
 
+	query := `
+		SELECT task_id, type, priority, payload, attempts, max_attempts
+		FROM tasks
+		WHERE status = 'retry' AND next_run_at IS NOT NULL AND next_run_at <= now()
+		ORDER BY next_run_at ASC
+		LIMIT 100
+	`
+
+	// STEP 2: Execute the query
+	// Use w.dbPool.Query(ctx, query) to execute the SQL query
+	// Handle errors: if query fails, log error and return early
+	// Example: rows, err := w.dbPool.Query(ctx, query)
+	//          if err != nil { log error and return }
+
+	rows, err := w.dbPool.Query(ctx, query)
+	if err != nil {
+		log.Printf("Retry pump: Error querying database: %v", err)
+		return
+	}
+
+	// STEP 3: Defer rows.Close()
+	// Always defer rows.Close() to ensure database connection is released
+	// This prevents connection leaks
+	// Example: defer rows.Close()
+	defer rows.Close()
+	
+	
+
+	// STEP 4: Check if no rows returned
+	// If no jobs are ready to retry, just return (nothing to do)
+	// STEP 5: Create variables to track processing
+	// - processedCount := 0 (optional, for logging)
+	// - Variables to scan into: taskID (uuid.UUID), jobType (string), priority (string),
+	//   payloadJSON (json.RawMessage or []byte), attempts (int), maxAttempts (int)
+
+	processedCount := 0
+	var taskID uuid.UUID
+	var jobType string
+	var priority string
+	var payloadJSON json.RawMessage
+	var attempts int
+	var maxAttempts int
+
+	// STEP 6: Iterate through query results
+	// Use for rows.Next() { ... } loop
+	// This will iterate through each row returned by the query
+
+	for rows.Next() {
+
+		// STEP 6.1: Scan row into variables
+		// Use rows.Scan() to read values from the current row
+		// Scan into: &taskID, &jobType, &priority, &payloadJSON, &attempts, &maxAttempts
+		// Handle scan errors: log error and continue to next row (don't stop processing)
+		// Example: err := rows.Scan(&taskID, &jobType, &priority, &payloadJSON, &attempts, &maxAttempts)
+		//          if err != nil { log error, continue }
+
+		// STEP 6.2: Check if job is still retryable
+		// Compare attempts with maxAttempts
+		// If attempts >= maxAttempts:
+		//   - Job has exceeded max attempts, mark as permanently failed
+		//   - Call w.markJobFailed(ctx, taskID, "Max attempts exceeded")
+		//   - Continue to next job (don't requeue)
+		// Example: if attempts >= maxAttempts { mark as failed, continue }
+
+		// STEP 6.3: Requeue the job
+		// If attempts < maxAttempts, the job is still retryable
+		// Call w.requeueRetryJob(ctx, taskID, jobType, priority, payloadJSON)
+		// Handle errors: log error but continue processing other jobs
+		// Don't return on error - we want to process all ready jobs
+		// Example: if err := w.requeueRetryJob(...); err != nil {
+		//              log.Printf("Retry pump: Failed to requeue job %s: %v", taskID, err)
+		//              continue
+		//          }
+
+		// STEP 6.4: Optional - increment processedCount
+		// Track how many jobs were successfully requeued for logging
+
+		err := rows.Scan(&taskID, &jobType, &priority, &payloadJSON, &attempts, &maxAttempts)
+		if err != nil {
+			log.Printf("Retry pump: Error scanning row: %v", err)
+			continue
+		}
+
+		if attempts >= maxAttempts {
+			log.Printf("Retry pump: Job %s has exceeded max attempts, marking as failed", taskID)
+			w.markJobFailed(ctx, taskID, "Max attempts exceeded")
+			continue
+		}
+
+		if err := w.requeueRetryJob(ctx, taskID, jobType, priority, payloadJSON); err != nil {
+			log.Printf("Retry pump: Failed to requeue job %s: %v", taskID, err)
+			continue
+		}
+
+		processedCount++
+	}
+		
+	// STEP 7: Check for iteration errors
+	// After the loop, check rows.Err() for any errors during iteration
+	// Handle errors: log and return (or just log, depending on severity)
+	// Example: if err := rows.Err(); err != nil {
+	//              log.Printf("Retry pump: Error iterating rows: %v", err)
+	//              return
+	//          }
+
+	if err := rows.Err(); err != nil {
+		log.Printf("Retry pump: Error iterating rows: %v", err)
+		return
+	}
+
+	// STEP 8: Optional - Log summary
+	// If you tracked processedCount, log how many jobs were requeued
+	// Example: if processedCount > 0 {
+	//              log.Printf("Retry pump: Requeued %d job(s)", processedCount)
+	//          }
+	if processedCount > 0 {
+		log.Printf("Retry pump: Requeued %d job(s)", processedCount)
+	}
 }
 
-func (w *Worker) requeueRetryJob(ctx context.Context, jobId uuid.UUID) {
+func (w *Worker) requeueRetryJob(ctx context.Context, jobID uuid.UUID, jobType, priority string, payloadJSON json.RawMessage) error {
 	
 }
