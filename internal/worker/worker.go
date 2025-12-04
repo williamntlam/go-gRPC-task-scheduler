@@ -480,6 +480,11 @@ func (w *Worker) markJobDeadLetter(ctx context.Context, jobID uuid.UUID, errorMs
 	//   SET status = 'deadletter', updated_at = now()
 	//   WHERE task_id = $1
 
+	query := `
+		UPDATE tasks 
+		SET status = 'deadletter', updated_at = now()
+		WHERE task_id = $1
+	`
 	// STEP 2: Execute the UPDATE query
 	// Use w.dbPool.Exec(ctx, query, jobID) to execute
 	// Handle errors: return wrapped error
@@ -488,15 +493,14 @@ func (w *Worker) markJobDeadLetter(ctx context.Context, jobID uuid.UUID, errorMs
 	//              return fmt.Errorf("failed to mark job as deadletter: %w", err)
 	//          }
 
-	// STEP 3: Log the deadletter event
-	// Log that the job has been marked as deadletter with the error message
-	// Example: log.Printf("Job %s marked as deadletter: %s", jobID, errorMsg)
+	_, err := w.dbPool.Exec(ctx, query, jobID)
+	if err != nil {
+		return fmt.Errorf("failed to mark job as deadletter: %w", err)
+	}
 
-	// STEP 4: Return nil on success
-	// Example: return nil
-	
-	// TODO: Implement the function body above
-	return fmt.Errorf("markJobDeadLetter not yet implemented")
+	log.Printf("Job %s marked as deadletter: %s", jobID, errorMsg)
+
+	return nil
 }
 
 // markJobRetry updates job status to 'retry' and sets next_run_at for retry scheduling
