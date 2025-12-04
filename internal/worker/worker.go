@@ -431,6 +431,17 @@ func (w *Worker) claimJob(ctx context.Context, jobID uuid.UUID) (bool, error) {
 		return false, fmt.Errorf("failed to claim job: %w", err)
 	}
 	
+	// STEP: Insert task attempt record
+	// After successfully claiming the job, insert a record into task_attempts table
+	// This tracks when the job execution started
+	// Call db.InsertAttempt(ctx, w.dbPool, jobID) to insert the attempt
+	// Handle errors: log error but don't fail the claim (attempt tracking is for audit/debugging)
+	// The job is already claimed, so we continue even if attempt insertion fails
+	// Example: if attemptErr := db.InsertAttempt(ctx, w.dbPool, jobID); attemptErr != nil {
+	//              log.Printf("Warning: Failed to insert task attempt for job %s: %v", jobID, attemptErr)
+	//              // Continue anyway - job is claimed, attempt tracking is secondary
+	//          }
+	
 	return true, nil
 }
 
@@ -446,6 +457,17 @@ func (w *Worker) markJobSucceeded(ctx context.Context, jobID uuid.UUID) error {
 	if err != nil {
 		return fmt.Errorf("failed to mark job as succeeded: %w", err)
 	}
+	
+	// STEP: Update task attempt record on success
+	// After marking job as succeeded, update the task_attempts record
+	// This marks the attempt as completed successfully
+	// Call db.UpdateAttemptOnSuccess(ctx, w.dbPool, jobID) to update the attempt
+	// Handle errors: log error but don't fail (attempt tracking is for audit/debugging)
+	// The job is already marked as succeeded, so we continue even if attempt update fails
+	// Example: if attemptErr := db.UpdateAttemptOnSuccess(ctx, w.dbPool, jobID); attemptErr != nil {
+	//              log.Printf("Warning: Failed to update task attempt for job %s: %v", jobID, attemptErr)
+	//              // Continue anyway - job is succeeded, attempt tracking is secondary
+	//          }
 	
 	return nil
 }
@@ -607,6 +629,17 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 			log.Printf("DLQ: Failed to mark job %s as deadletter in DB: %v", job.TaskID, dbErr)
 		}
 
+		// STEP 5.5: Update task attempt record on failure (DLQ path)
+		// After marking job as deadletter, update the task_attempts record
+		// This marks the attempt as completed with failure
+		// Call db.UpdateAttemptOnFailure(ctx, w.dbPool, job.TaskID, originalErrMsg) to update the attempt
+		// Handle errors: log error but don't fail (attempt tracking is for audit/debugging)
+		// The job is already in DLQ, so we continue even if attempt update fails
+		// Example: if attemptErr := db.UpdateAttemptOnFailure(ctx, w.dbPool, job.TaskID, originalErrMsg); attemptErr != nil {
+		//              log.Printf("Warning: Failed to update task attempt for job %s: %v", job.TaskID, attemptErr)
+		//              // Continue anyway - job is in DLQ, attempt tracking is secondary
+		//          }
+
 		// STEP 6: Log the DLQ event
 		// Log that the job has been moved to DLQ with attempt count
 		// Example: log.Printf("Job %s moved to DLQ after %d attempts (max: %d)", job.TaskID, job.Attempts, job.MaxAttempts)
@@ -644,6 +677,17 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 	
 	log.Printf("Job %s failed (attempt %d/%d), will retry later at %s", job.TaskID, job.Attempts, job.MaxAttempts, nextRunAt.Format(time.RFC3339))
 	w.markJobRetry(ctx, job.TaskID, err.Error(), nextRunAt)
+
+	// STEP 2.5: Update task attempt record on failure (retry path)
+	// After marking job for retry, update the task_attempts record
+	// This marks the current attempt as completed with failure
+	// Call db.UpdateAttemptOnFailure(ctx, w.dbPool, job.TaskID, err.Error()) to update the attempt
+	// Handle errors: log error but don't fail (attempt tracking is for audit/debugging)
+	// The job is already marked for retry, so we continue even if attempt update fails
+	// Example: if attemptErr := db.UpdateAttemptOnFailure(ctx, w.dbPool, job.TaskID, err.Error()); attemptErr != nil {
+	//              log.Printf("Warning: Failed to update task attempt for job %s: %v", job.TaskID, attemptErr)
+	//              // Continue anyway - job is marked for retry, attempt tracking is secondary
+	//          }
 
 }
 
