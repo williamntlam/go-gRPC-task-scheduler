@@ -543,6 +543,12 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 		//     Priority: job.Priority,
 		// }
 
+		payload := redis.JobPayload{
+			TaskID: job.TaskID.String(),
+			Type: job.Type,
+			Priority: job.Priority,
+		}
+
 		// STEP 2: Marshal payload to JSON
 		// Use json.Marshal(payload) to convert struct to JSON bytes
 		// Handle marshaling errors: log error but continue (we still want to update DB)
@@ -551,22 +557,39 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 		//              log.Printf("DLQ: Failed to marshal payload for job %s: %v", job.TaskID, marshalErr)
 		//          }
 
-		// STEP 3: Get DLQ queue name
-		// DLQ queues follow the pattern: "dlq:{priority}"
-		// Examples: "dlq:critical", "dlq:high", "dlq:default", "dlq:low"
-		// Build the queue name: "dlq:" + job.Priority
-		// Example: dlqQueueName := "dlq:" + job.Priority
+		// Save original error message before it gets shadowed
+		originalErrMsg := err.Error()
 
-		// STEP 4: Push job to DLQ Redis queue
-		// Use w.redisClient.LPush(ctx, dlqQueueName, payloadJSON) to push to DLQ
-		// Handle errors: log error but continue (we still want to update DB status)
-		// Note: Even if Redis push fails, we still update DB to 'deadletter'
-		// This ensures the job is tracked in the database even if Redis fails
-		// Example: if pushErr := w.redisClient.LPush(ctx, dlqQueueName, payloadJSON).Err(); pushErr != nil {
-		//              log.Printf("DLQ: Failed to push job %s to DLQ queue %s: %v", job.TaskID, dlqQueueName, pushErr)
-		//          } else {
-		//              log.Printf("DLQ: Pushed job %s to DLQ queue %s", job.TaskID, dlqQueueName)
-		//          }
+		payloadJSON, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			log.Printf("DLQ: Failed to marshal payload for job %s: %v", job.TaskID, marshalErr)
+			// Still try to update DB even if marshaling fails
+		} else {
+			// STEP 3: Get DLQ queue name
+			// DLQ queues follow the pattern: "dlq:{priority}"
+			// Examples: "dlq:critical", "dlq:high", "dlq:default", "dlq:low"
+			// Build the queue name: "dlq:" + job.Priority
+			// Example: dlqQueueName := "dlq:" + job.Priority
+
+			dlqQueueName := "dlq:" + job.Priority
+
+			// STEP 4: Push job to DLQ Redis queue
+			// Use w.redisClient.LPush(ctx, dlqQueueName, payloadJSON) to push to DLQ
+			// Handle errors: log error but continue (we still want to update DB status)
+			// Note: Even if Redis push fails, we still update DB to 'deadletter'
+			// This ensures the job is tracked in the database even if Redis fails
+			// Example: if pushErr := w.redisClient.LPush(ctx, dlqQueueName, payloadJSON).Err(); pushErr != nil {
+			//              log.Printf("DLQ: Failed to push job %s to DLQ queue %s: %v", job.TaskID, dlqQueueName, pushErr)
+			//          } else {
+			//              log.Printf("DLQ: Pushed job %s to DLQ queue %s", job.TaskID, dlqQueueName)
+			//          }
+
+			if pushErr := w.redisClient.LPush(ctx, dlqQueueName, payloadJSON).Err(); pushErr != nil {
+				log.Printf("DLQ: Failed to push job %s to DLQ queue %s: %v", job.TaskID, dlqQueueName, pushErr)
+			} else {
+				log.Printf("DLQ: Pushed job %s to DLQ queue %s", job.TaskID, dlqQueueName)
+			}
+		}
 
 		// STEP 5: Update database status to 'deadletter'
 		// Call w.markJobDeadLetter(ctx, job.TaskID, err.Error()) to update DB
@@ -576,13 +599,20 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 		//              log.Printf("DLQ: Failed to mark job %s as deadletter in DB: %v", job.TaskID, dbErr)
 		//          }
 
+		if dbErr := w.markJobDeadLetter(ctx, job.TaskID, originalErrMsg); dbErr != nil {
+			log.Printf("DLQ: Failed to mark job %s as deadletter in DB: %v", job.TaskID, dbErr)
+		}
+
 		// STEP 6: Log the DLQ event
 		// Log that the job has been moved to DLQ with attempt count
 		// Example: log.Printf("Job %s moved to DLQ after %d attempts (max: %d)", job.TaskID, job.Attempts, job.MaxAttempts)
 
+		log.Printf("Job %s moved to DLQ after %d attempts (max: %d)", job.TaskID, job.Attempts, job.MaxAttempts)
+
 		// STEP 7: Return (job is now in DLQ, no retry)
 		// Return from function - job is permanently failed and in DLQ
 		// Example: return
+		return
 	} 
 
 	// STEP 2: If retry is needed (attempts < max attempts):
