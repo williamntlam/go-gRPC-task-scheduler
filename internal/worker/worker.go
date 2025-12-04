@@ -467,6 +467,38 @@ func (w *Worker) markJobFailed(ctx context.Context, jobID uuid.UUID, errorMsg st
 	return nil
 }
 
+// markJobDeadLetter updates job status to 'deadletter' in the database
+// This is called when a job has exceeded max_attempts and is moved to DLQ
+func (w *Worker) markJobDeadLetter(ctx context.Context, jobID uuid.UUID, errorMsg string) error {
+	// STEP 1: Build SQL UPDATE query
+	// Query should:
+	//   - UPDATE tasks SET status = 'deadletter', updated_at = now()
+	//   - WHERE task_id = $1
+	// Similar to markJobFailed() but with status = 'deadletter'
+	// Example query:
+	//   UPDATE tasks 
+	//   SET status = 'deadletter', updated_at = now()
+	//   WHERE task_id = $1
+
+	// STEP 2: Execute the UPDATE query
+	// Use w.dbPool.Exec(ctx, query, jobID) to execute
+	// Handle errors: return wrapped error
+	// Example: _, err := w.dbPool.Exec(ctx, query, jobID)
+	//          if err != nil {
+	//              return fmt.Errorf("failed to mark job as deadletter: %w", err)
+	//          }
+
+	// STEP 3: Log the deadletter event
+	// Log that the job has been marked as deadletter with the error message
+	// Example: log.Printf("Job %s marked as deadletter: %s", jobID, errorMsg)
+
+	// STEP 4: Return nil on success
+	// Example: return nil
+	
+	// TODO: Implement the function body above
+	return fmt.Errorf("markJobDeadLetter not yet implemented")
+}
+
 // markJobRetry updates job status to 'retry' and sets next_run_at for retry scheduling
 func (w *Worker) markJobRetry(ctx context.Context, jobID uuid.UUID, errorMsg string, nextRunAt time.Time) error {
 	query := `
@@ -491,10 +523,66 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 	// If job.Attempts < job.MaxAttempts, we should retry
 	// Otherwise, mark as permanently failed
 	if job.Attempts >= job.MaxAttempts {
-		// Max attempts reached, mark as permanently failed
-		log.Printf("Job %s failed after %d attempts, marking as failed", job.TaskID, job.Attempts)
-		w.markJobFailed(ctx, job.TaskID, err.Error())
-		return
+		// Max attempts reached - move job to Dead Letter Queue (DLQ)
+		// STEP 1: Create Redis job payload for DLQ
+		// Create a redis.JobPayload struct with:
+		//   - TaskID: job.TaskID.String() (convert UUID to string)
+		//   - Type: job.Type
+		//   - Priority: job.Priority
+		// Example:
+		//   payload := redis.JobPayload{
+		//       TaskID:   job.TaskID.String(),
+		//       Type:     job.Type,
+		//       Priority: job.Priority,
+		//   }
+
+		// TODO: Implement STEP 1 - Create payload struct
+		// payload := redis.JobPayload{
+		//     TaskID:   job.TaskID.String(),
+		//     Type:     job.Type,
+		//     Priority: job.Priority,
+		// }
+
+		// STEP 2: Marshal payload to JSON
+		// Use json.Marshal(payload) to convert struct to JSON bytes
+		// Handle marshaling errors: log error but continue (we still want to update DB)
+		// Example: payloadJSON, marshalErr := json.Marshal(payload)
+		//          if marshalErr != nil {
+		//              log.Printf("DLQ: Failed to marshal payload for job %s: %v", job.TaskID, marshalErr)
+		//          }
+
+		// STEP 3: Get DLQ queue name
+		// DLQ queues follow the pattern: "dlq:{priority}"
+		// Examples: "dlq:critical", "dlq:high", "dlq:default", "dlq:low"
+		// Build the queue name: "dlq:" + job.Priority
+		// Example: dlqQueueName := "dlq:" + job.Priority
+
+		// STEP 4: Push job to DLQ Redis queue
+		// Use w.redisClient.LPush(ctx, dlqQueueName, payloadJSON) to push to DLQ
+		// Handle errors: log error but continue (we still want to update DB status)
+		// Note: Even if Redis push fails, we still update DB to 'deadletter'
+		// This ensures the job is tracked in the database even if Redis fails
+		// Example: if pushErr := w.redisClient.LPush(ctx, dlqQueueName, payloadJSON).Err(); pushErr != nil {
+		//              log.Printf("DLQ: Failed to push job %s to DLQ queue %s: %v", job.TaskID, dlqQueueName, pushErr)
+		//          } else {
+		//              log.Printf("DLQ: Pushed job %s to DLQ queue %s", job.TaskID, dlqQueueName)
+		//          }
+
+		// STEP 5: Update database status to 'deadletter'
+		// Call w.markJobDeadLetter(ctx, job.TaskID, err.Error()) to update DB
+		// This function should update status to 'deadletter' (not 'failed')
+		// Pass the original error message (err.Error()) for debugging
+		// Example: if dbErr := w.markJobDeadLetter(ctx, job.TaskID, err.Error()); dbErr != nil {
+		//              log.Printf("DLQ: Failed to mark job %s as deadletter in DB: %v", job.TaskID, dbErr)
+		//          }
+
+		// STEP 6: Log the DLQ event
+		// Log that the job has been moved to DLQ with attempt count
+		// Example: log.Printf("Job %s moved to DLQ after %d attempts (max: %d)", job.TaskID, job.Attempts, job.MaxAttempts)
+
+		// STEP 7: Return (job is now in DLQ, no retry)
+		// Return from function - job is permanently failed and in DLQ
+		// Example: return
 	} 
 
 	// STEP 2: If retry is needed (attempts < max attempts):
