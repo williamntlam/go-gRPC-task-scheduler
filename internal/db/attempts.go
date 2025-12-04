@@ -27,6 +27,11 @@ func InsertAttempt(ctx context.Context, pool *pgxpool.Pool, taskID uuid.UUID) er
 	//   INSERT INTO task_attempts (task_id, started_at)
 	//   VALUES ($1, now())
 
+	query := `
+		INSERT INTO task_attempts (task_id, started_at)
+		VALUES ($1, now())
+	`
+
 	// STEP 2: Execute the INSERT query
 	// Use pool.Exec(ctx, query, taskID) to execute
 	// Handle errors: return wrapped error
@@ -35,11 +40,15 @@ func InsertAttempt(ctx context.Context, pool *pgxpool.Pool, taskID uuid.UUID) er
 	//              return fmt.Errorf("failed to insert task attempt: %w", err)
 	//          }
 
+	_, err := pool.Exec(ctx, query, taskID)
+	if err != nil {
+		return fmt.Errorf("failed to insert task attempt: %w", err)
+	}
+
 	// STEP 3: Return nil on success
 	// Example: return nil
-	
-	// TODO: Implement the function body above
-	return fmt.Errorf("InsertAttempt not yet implemented")
+	return nil
+
 }
 
 // UpdateAttemptOnSuccess updates a task attempt record when a job succeeds
