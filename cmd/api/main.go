@@ -15,6 +15,7 @@ import (
 
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/db"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/redis"
+	"github.com/williamntlam/go-grpc-task-scheduler/internal/server"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/utils"
 	schedulerv1 "github.com/williamntlam/go-grpc-task-scheduler/proto/scheduler/v1"
 )
@@ -82,8 +83,8 @@ func main() {
 	)
 
 	// Create and register the scheduler service
-	server := NewServer(dbPool, redisClient)
-	schedulerv1.RegisterSchedulerServiceServer(grpcServer, server)
+	schedulerServer := server.NewServer(dbPool, redisClient)
+	schedulerv1.RegisterSchedulerServiceServer(grpcServer, schedulerServer)
 
 	// Enable gRPC reflection for development/testing (disable in production)
 	// This allows tools like grpcurl to discover services
