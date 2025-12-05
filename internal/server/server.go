@@ -23,39 +23,20 @@ import (
 // Server implements the SchedulerService gRPC interface
 // This struct holds the dependencies needed for all service methods
 type Server struct {
-	// STEP 1: Define the Server struct fields
-	// You'll need:
-	//   - dbPool: *pgxpool.Pool (database connection pool)
-	//   - redisClient: *redisc.Client (Redis client for queue operations)
-	// Example:
-	//   dbPool      *pgxpool.Pool
-	//   redisClient *redisc.Client
 
-	// TODO: Add fields here
-	// dbPool      *pgxpool.Pool
-	// redisClient *redisc.Client
-
-	// Uncomment and implement:
-	dbPool      *pgxpool.Pool
+	dbPool *pgxpool.Pool
 	redisClient *redisc.Client
 }
 
 // NewServer creates a new Server instance
 // This is the constructor function that initializes the Server struct
 func NewServer(dbPool *pgxpool.Pool, redisClient *redisc.Client) *Server {
-	// STEP 2: Implement the constructor
-	// Return a new Server struct with the provided dependencies
-	// Example:
-	//   return &Server{
-	//       dbPool:      dbPool,
-	//       redisClient: redisClient,
-	//   }
 
-	// TODO: Implement constructor
 	return &Server{
-		dbPool:      dbPool,
+		dbPool: dbPool,
 		redisClient: redisClient,
 	}
+
 }
 
 // ============================================================================
