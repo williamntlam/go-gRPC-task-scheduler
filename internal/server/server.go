@@ -39,9 +39,9 @@ func NewServer(dbPool *pgxpool.Pool, redisClient *redisc.Client) *Server {
 
 }
 
-// ============================================================================
-// HELPER FUNCTIONS (Implement these first - they'll be used by all methods)
-// ============================================================================
+// ================
+// HELPER FUNCTIONS 
+// ================
 
 // priorityProtoToString converts protobuf Priority enum to database string
 // This is needed because:
@@ -49,25 +49,8 @@ func NewServer(dbPool *pgxpool.Pool, redisClient *redisc.Client) *Server {
 //   - Database/Redis uses: "critical", "high", "default", "low"
 // Function signature: func priorityProtoToString(priority schedulerv1.Priority) string
 func priorityProtoToString(priority schedulerv1.Priority) string {
-	// STEP 3: Implement priority conversion
 	// Use a switch statement to map protobuf enum values to strings:
-	//   - schedulerv1.Priority_PRIORITY_CRITICAL -> "critical"
-	//   - schedulerv1.Priority_PRIORITY_HIGH -> "high"
-	//   - schedulerv1.Priority_PRIORITY_DEFAULT -> "default"
-	//   - schedulerv1.Priority_PRIORITY_LOW -> "low"
-	//   - schedulerv1.Priority_PRIORITY_UNSPECIFIED -> "default" (default fallback)
-	// Example:
-	//   switch priority {
-	//   case schedulerv1.Priority_PRIORITY_CRITICAL:
-	//       return "critical"
-	//   case schedulerv1.Priority_PRIORITY_HIGH:
-	//       return "high"
-	//   ... etc
-	//   default:
-	//       return "default"
-	//   }
 
-	// TODO: Implement priority conversion
 	switch priority {
 	case schedulerv1.Priority_PRIORITY_CRITICAL:
 		return "critical"
@@ -75,8 +58,8 @@ func priorityProtoToString(priority schedulerv1.Priority) string {
 		return "high"
 	case schedulerv1.Priority_PRIORITY_DEFAULT:
 		return "default"
-	case schedulerv1.Priority_PRIORITY_LOW:
-		return "low"
+		case schedulerv1.Priority_PRIORITY_LOW:
+			return "low"
 	default:
 		return "default"
 	}
