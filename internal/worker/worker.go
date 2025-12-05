@@ -442,6 +442,11 @@ func (w *Worker) claimJob(ctx context.Context, jobID uuid.UUID) (bool, error) {
 	//              // Continue anyway - job is claimed, attempt tracking is secondary
 	//          }
 	
+	if attemptErr := db.InsertAttempt(ctx, w.dbPool, jobID); attemptErr != nil {
+		log.Printf("Warning: Failed to insert task attempt for job %s: %v", jobID, attemptErr)
+		// Continue anyway - job is claimed, attempt tracking is secondary
+	}
+	
 	return true, nil
 }
 
@@ -468,6 +473,11 @@ func (w *Worker) markJobSucceeded(ctx context.Context, jobID uuid.UUID) error {
 	//              log.Printf("Warning: Failed to update task attempt for job %s: %v", jobID, attemptErr)
 	//              // Continue anyway - job is succeeded, attempt tracking is secondary
 	//          }
+	
+	if attemptErr := db.UpdateAttemptOnSuccess(ctx, w.dbPool, jobID); attemptErr != nil {
+		log.Printf("Warning: Failed to update task attempt for job %s: %v", jobID, attemptErr)
+		// Continue anyway - job is succeeded, attempt tracking is secondary
+	}
 	
 	return nil
 }
@@ -639,6 +649,11 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 		//              log.Printf("Warning: Failed to update task attempt for job %s: %v", job.TaskID, attemptErr)
 		//              // Continue anyway - job is in DLQ, attempt tracking is secondary
 		//          }
+		
+		if attemptErr := db.UpdateAttemptOnFailure(ctx, w.dbPool, job.TaskID, originalErrMsg); attemptErr != nil {
+			log.Printf("Warning: Failed to update task attempt for job %s: %v", job.TaskID, attemptErr)
+			// Continue anyway - job is in DLQ, attempt tracking is secondary
+		}
 
 		// STEP 6: Log the DLQ event
 		// Log that the job has been moved to DLQ with attempt count
@@ -688,6 +703,11 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 	//              log.Printf("Warning: Failed to update task attempt for job %s: %v", job.TaskID, attemptErr)
 	//              // Continue anyway - job is marked for retry, attempt tracking is secondary
 	//          }
+	
+	if attemptErr := db.UpdateAttemptOnFailure(ctx, w.dbPool, job.TaskID, err.Error()); attemptErr != nil {
+		log.Printf("Warning: Failed to update task attempt for job %s: %v", job.TaskID, attemptErr)
+		// Continue anyway - job is marked for retry, attempt tracking is secondary
+	}
 
 }
 

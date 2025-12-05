@@ -121,6 +121,12 @@ func UpdateAttemptOnFailure(ctx context.Context, pool *pgxpool.Pool, taskID uuid
 	//   SET finished_at = now(), ok = false, error = $2
 	//   WHERE task_id = $1 AND finished_at IS NULL
 
+	query := `
+		UPDATE task_attempts 
+		SET finished_at = now(), ok = false, error = $2
+		WHERE task_id = $1 AND finished_at IS NULL
+	`
+
 	// STEP 2: Execute the UPDATE query
 	// Use pool.Exec(ctx, query, taskID, errorMsg) to execute
 	// Note: errorMsg is the second parameter ($2)
@@ -130,10 +136,14 @@ func UpdateAttemptOnFailure(ctx context.Context, pool *pgxpool.Pool, taskID uuid
 	//              return fmt.Errorf("failed to update task attempt on failure: %w", err)
 	//          }
 
+	_, err := pool.Exec(ctx, query, taskID, errorMsg)
+	if err != nil {
+		return fmt.Errorf("failed to update task attempt on failure: %w", err)
+	}
+
 	// STEP 3: Return nil on success
 	// Example: return nil
 	
-	// TODO: Implement the function body above
-	return fmt.Errorf("UpdateAttemptOnFailure not yet implemented")
+	return nil
 }
 
