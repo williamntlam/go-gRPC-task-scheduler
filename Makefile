@@ -31,15 +31,13 @@ clean:
 api:
 	go run ./cmd/api
 
-# Start the worker (TODO: implement cmd/worker)
+# Start the worker
 worker:
-	@echo "TODO: Implement worker"
-	# go run ./cmd/worker
+	go run ./cmd/worker
 
-# Run database migrations
+# Run database migrations (runs setup.sh to create/update schema)
 migrate:
-	@echo "TODO: Implement migrations"
-	# Run migrations using golang-migrate or similar
+	./scripts/setup.sh
 
 # Check if services are running
 status:
