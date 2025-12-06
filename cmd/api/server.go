@@ -48,6 +48,7 @@ import (
 
 // Server implements the SchedulerServiceServer interface
 type Server struct {
+	schedulerv1.UnimplementedSchedulerServiceServer
 
 	// Database connection pool
 	db *pgxpool.Pool
