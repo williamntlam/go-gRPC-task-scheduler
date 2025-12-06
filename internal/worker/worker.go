@@ -91,7 +91,8 @@ func (w *Worker) Start() {
 	// Start reaper process to recover stuck jobs from processing queue
 	go w.reaper(ctx)
 	go w.retryPump(ctx)
-	log.Printf("[Worker] Background processes started: reaper and retry pump")
+	go w.updateQueueDepth(ctx)
+	log.Printf("[Worker] Background processes started: reaper, retry pump, and queue depth tracker")
 
 	for {
 		// STEP 5: Add shutdown check at the start of the loop
@@ -262,6 +263,54 @@ func (w *Worker) Start() {
 			}
 		}(job, jobPayloadJSON, sourceQueue)
 	}
+}
+
+// updateQueueDepth periodically updates queue depth metrics
+func (w *Worker) updateQueueDepth(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	log.Printf("[QueueDepth] Starting queue depth tracker")
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("[QueueDepth] Queue depth tracker stopping")
+			return
+		case <-ticker.C:
+			w.updateQueueMetrics(ctx)
+		}
+	}
+}
+
+// updateQueueMetrics queries Redis for queue lengths and updates metrics
+func (w *Worker) updateQueueMetrics(ctx context.Context) {
+	// Update priority queue depths
+	priorities := []string{"critical", "high", "default", "low"}
+	for _, priority := range priorities {
+		queueName := redis.GetQueueName(priority)
+		if queueName == "" {
+			continue
+		}
+
+		depth, err := w.redisClient.LLen(ctx, queueName).Result()
+		if err != nil {
+			log.Printf("[QueueDepth] Error querying queue depth: queue=%s, error: %v", queueName, err)
+			continue
+		}
+
+		metrics.QueueDepth.WithLabelValues(priority).Set(float64(depth))
+	}
+
+	// Update processing queue depth
+	processingQueue := "q:processing"
+	processingDepth, err := w.redisClient.LLen(ctx, processingQueue).Result()
+	if err != nil {
+		log.Printf("[QueueDepth] Error querying processing queue depth: error: %v", err)
+		return
+	}
+
+	metrics.ProcessingQueueDepth.Set(float64(processingDepth))
 }
 
 // Stop gracefully stops the worker
