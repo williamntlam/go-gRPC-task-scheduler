@@ -1,5 +1,10 @@
 package metrics
 
+import (
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+)
+
 // ============================================================================
 // STEP 1: Import Required Packages
 // ============================================================================
@@ -49,6 +54,190 @@ package metrics
 //       },
 //       []string{"label1", "label2"}, // Labels you'll use when recording
 //   )
+
+// ============================================================================
+// RECOMMENDED METRICS FOR YOUR TASK SCHEDULER
+// ============================================================================
+// Based on your system architecture, here are the essential metrics you should create:
+
+// PRODUCER METRICS (API Server - cmd/api/server.go)
+// --------------------------------------------------
+// 1. JobsSubmitted - Track all jobs created by producers
+//    - CounterVec with label: "priority"
+//    - Increment in SubmitJob() after successful job creation
+//    - Tells you: How many jobs are being submitted, broken down by priority
+
+var JobsSubmitted = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "jobs_submitted_total",
+		Help: "Total number of jobs submitted to the scheduler",
+	},
+	[]string{"priority"},
+)
+
+// 2. JobsSubmittedErrors - Track failed submissions
+//    - CounterVec with label: "error_type" (validation, database, redis)
+//    - Increment in SubmitJob() when errors occur
+//    - Tells you: Why submissions are failing
+
+var JobsSubmittedErrors = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "jobs_submitted_errors_total",
+		Help: "Total number of failed job submissions",
+	},
+	[]string{"error_type"},
+)
+
+// CONSUMER METRICS (Worker - internal/worker/worker.go)
+// ------------------------------------------------------
+// 3. JobsProcessed - Track all jobs processed by workers
+//    - CounterVec with label: "status" (success, failed, retry)
+//    - Increment when job completes (in markJobSucceeded, handleJobFailure)
+//    - Tells you: Success rate, failure rate, retry rate
+
+var JobsProcessed = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "jobs_processed_total",
+		Help: "Total number of jobs processed by workers",
+	},
+	[]string{"status"},
+)
+
+// 4. JobProcessingDuration - How long jobs take to process
+//    - HistogramVec with label: "job_type" (noop, http_call, db_tx)
+//    - Measure in executeHandler() function
+//    - Tells you: Performance of different job types, identify slow jobs
+
+var JobProcessingDuration = promauto.NewHistogramVec(
+	prometheus.HistogramOpts{
+		Name:    "job_processing_duration_seconds",
+		Help:    "Time spent processing individual jobs in seconds",
+		Buckets: prometheus.DefBuckets,
+	},
+	[]string{"job_type"},
+)
+
+// 5. JobsRetried - Jobs scheduled for retry
+//    - CounterVec with label: "priority"
+//    - Increment in handleJobFailure() when job is retried
+//    - Tells you: How often jobs need retries
+
+var JobsRetried = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "jobs_retried_total",
+		Help: "Total number of jobs scheduled for retry",
+	},
+	[]string{"priority"},
+)
+
+// 6. JobsDeadlettered - Jobs moved to DLQ
+//    - CounterVec with label: "priority"
+//    - Increment in handleJobFailure() when max attempts reached
+//    - Tells you: Permanent failures that need investigation
+
+var JobsDeadlettered = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "jobs_deadlettered_total",
+		Help: "Total number of jobs moved to dead letter queue",
+	},
+	[]string{"priority"},
+)
+
+// QUEUE METRICS (Both API and Worker can update)
+// -----------------------------------------------
+// 7. QueueDepth - Current size of each priority queue
+//    - GaugeVec with label: "priority" (critical, high, default, low)
+//    - Update periodically in worker Start() loop or reaper
+//    - Use: w.redisClient.LLen(ctx, "q:critical").Val() to get depth
+//    - Tells you: Are queues backing up? Which priority has most work?
+
+var QueueDepth = promauto.NewGaugeVec(
+	prometheus.GaugeOpts{
+		Name: "queue_depth",
+		Help: "Current number of jobs waiting in each priority queue",
+	},
+	[]string{"priority"},
+)
+
+// 8. ProcessingQueueDepth - Jobs currently being processed
+//    - Gauge (no labels needed, or label: "status" if you want more detail)
+//    - Update when jobs move to/from processing queue
+//    - Tells you: How many jobs are in-flight
+
+var ProcessingQueueDepth = promauto.NewGauge(
+	prometheus.GaugeOpts{
+		Name: "processing_queue_depth",
+		Help: "Current number of jobs in the processing queue",
+	},
+)
+
+// WORKER METRICS (Worker - internal/worker/worker.go)
+// ----------------------------------------------------
+// 9. WorkerInflightJobs - Currently processing jobs
+//    - Gauge (no labels)
+//    - Increment when job starts, decrement when job finishes
+//    - Tells you: Worker utilization, are workers busy?
+
+var WorkerInflightJobs = promauto.NewGauge(
+	prometheus.GaugeOpts{
+		Name: "worker_inflight_jobs",
+		Help: "Current number of jobs being processed by workers",
+	},
+)
+
+// OPTIONAL METRICS (Nice to have, add later if needed)
+// -----------------------------------------------------
+// 10. GRPCRequests - Total gRPC API requests (optional)
+//     - CounterVec with labels: "method", "status"
+//     - Tells you: API usage patterns
+
+var GRPCRequests = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "grpc_requests_total",
+		Help: "Total number of gRPC API requests",
+	},
+	[]string{"method", "status"},
+)
+
+// 11. GRPCRequestDuration - API latency (optional)
+//     - HistogramVec with label: "method"
+//     - Tells you: API performance
+
+var GRPCRequestDuration = promauto.NewHistogramVec(
+	prometheus.HistogramOpts{
+		Name:    "grpc_request_duration_seconds",
+		Help:    "Duration of gRPC requests in seconds",
+		Buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+	},
+	[]string{"method"},
+)
+
+// 12. RetryPumpJobsRequeued - Jobs moved from retry back to queue (optional)
+//     - CounterVec with label: "priority"
+//     - Increment in processRetryJobs() when job is requeued
+//     - Tells you: Retry pump activity
+
+var RetryPumpJobsRequeued = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "retry_pump_jobs_requeued_total",
+		Help: "Total number of jobs moved from retry status back to queue",
+	},
+	[]string{"priority"},
+)
+
+// 13. ReaperJobsRecovered - Stuck jobs recovered by reaper (optional)
+//     - CounterVec with label: "priority"
+//     - Increment in recoverStuckJobs() when job is recovered
+//     - Tells you: How often jobs get stuck
+
+var ReaperJobsRecovered = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "reaper_jobs_recovered_total",
+		Help: "Total number of stuck jobs recovered by the reaper",
+	},
+	[]string{"priority"},
+)
+
 
 // ============================================================================
 // STEP 4: Create API Server Metrics
