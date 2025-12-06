@@ -10,8 +10,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	redisc "github.com/redis/go-redis/v9"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/db"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/redis"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/utils"
@@ -29,10 +31,49 @@ const (
 	defaultMetricsPort    = 2113
 )
 
-func startMetricsServer(port int) {
-	http.Handle("/metrics", promhttp.Handler())
-	log.Printf("Metrics server listening on :%d/metrics", port)
-	if err := http.ListenAndServe(":"+strconv.Itoa(port), nil); err != nil {
+func startMetricsServer(port int, dbPool *pgxpool.Pool, redisClient *redisc.Client) {
+	mux := http.NewServeMux()
+	
+	// Metrics endpoint
+	mux.Handle("/metrics", promhttp.Handler())
+	
+	// Health check endpoint - checks if service is alive
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+	
+	// Readiness endpoint - checks if dependencies are available
+	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		
+		// Check database connection
+		if err := dbPool.Ping(ctx); err != nil {
+			log.Printf("[Health] Database check failed: %v", err)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("Database unavailable"))
+			return
+		}
+		
+		// Check Redis connection
+		if err := redisClient.Ping(ctx).Err(); err != nil {
+			log.Printf("[Health] Redis check failed: %v", err)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("Redis unavailable"))
+			return
+		}
+		
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Ready"))
+	})
+	
+	log.Printf("Metrics and health server listening on :%d", port)
+	log.Printf("  - Metrics: http://localhost:%d/metrics", port)
+	log.Printf("  - Health:  http://localhost:%d/health", port)
+	log.Printf("  - Ready:   http://localhost:%d/ready", port)
+	
+	if err := http.ListenAndServe(":"+strconv.Itoa(port), mux); err != nil {
 		log.Fatalf("Failed to start metrics server: %v", err)
 	}
 }
@@ -132,7 +173,7 @@ func main() {
 	go w.Start()
 
 	// Start metrics server (Prometheus HTTP endpoint)
-	go startMetricsServer(metricsPort)
+	go startMetricsServer(metricsPort, dbPool, redisClient)
 
 	// Step 8: Handle graceful shutdown
 	waitForShutdown(w)
