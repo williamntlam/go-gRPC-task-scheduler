@@ -1,5 +1,28 @@
 package main
 
+// ============================================================================
+// METRICS INSTRUMENTATION GUIDE
+// ============================================================================
+// This file contains step-by-step comments showing where to add Prometheus metrics.
+//
+// Essential metrics to implement:
+//   1. JobsSubmitted - Increment after successful job creation in SubmitJob()
+//   2. JobsSubmittedErrors - Increment on errors in SubmitJob()
+//
+// Optional metrics (for deeper observability):
+//   3. GRPCRequests - Track all gRPC method calls (success/error)
+//   4. GRPCRequestDuration - Measure API latency for each method
+//
+// How to use metrics:
+//   - metrics.JobsSubmitted.WithLabelValues("high").Inc()
+//   - metrics.JobsSubmittedErrors.WithLabelValues("validation").Inc()
+//   - metrics.GRPCRequests.WithLabelValues("SubmitJob", "success").Inc()
+//   - metrics.GRPCRequestDuration.WithLabelValues("GetJob").Observe(duration)
+//
+// Look for "METRICS INSTRUMENTATION" comments throughout this file for
+// specific locations where you should add metric calls.
+// ============================================================================
+
 import (
 	"context"
 	"encoding/json"
@@ -15,7 +38,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/williamntlam/go-grpc-task-scheduler/internal/db"
+	"github.com/williamntlam/go-grpc-task-scheduler/internal/db" // Import metrics package
+	"github.com/williamntlam/go-grpc-task-scheduler/internal/metrics"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/redis"
 	schedulerv1 "github.com/williamntlam/go-grpc-task-scheduler/proto/scheduler/v1"
 
@@ -156,8 +180,22 @@ func priorityToString(priority schedulerv1.Priority) string {
 
 // SubmitJob handles job submission requests
 func (s *Server) SubmitJob(ctx context.Context, req *schedulerv1.SubmitJobRequest) (*schedulerv1.SubmitJobResponse, error) {
+	// ============================================================================
+	// METRICS INSTRUMENTATION - Track gRPC request duration
+	// ============================================================================
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start).Seconds()
+		metrics.GRPCRequestDuration.WithLabelValues("SubmitJob").Observe(duration)
+	}()
+
 	// 1. Validate request
 	if err := validateSubmitJobRequest(req); err != nil {
+		// ============================================================================
+		// METRICS INSTRUMENTATION - Track validation errors
+		// ============================================================================
+		metrics.JobsSubmittedErrors.WithLabelValues("validation").Inc()
+		metrics.GRPCRequests.WithLabelValues("SubmitJob", "error").Inc()
 		return nil, err
 	}
 
@@ -176,10 +214,12 @@ func (s *Server) SubmitJob(ctx context.Context, req *schedulerv1.SubmitJobReques
 	// 
 	// Idempotency: If job_id already exists in tasks table, return existing job
 	var jobID uuid.UUID
-	if job.JobId != "" {
+		if job.JobId != "" {
 		// Client provided job_id, parse it
 		parsedID, err := uuid.Parse(job.JobId)
 		if err != nil {
+			metrics.JobsSubmittedErrors.WithLabelValues("validation").Inc()
+			metrics.GRPCRequests.WithLabelValues("SubmitJob", "error").Inc()
 			return nil, status.Error(codes.InvalidArgument, "job_id must be a valid UUID")
 		}
 		jobID = parsedID
@@ -191,11 +231,22 @@ func (s *Server) SubmitJob(ctx context.Context, req *schedulerv1.SubmitJobReques
 	// Check if the jobId is in the database already (idempotency check)
 	exists, err := db.JobExists(ctx, s.db, jobID)
 	if err != nil {
+		// ============================================================================
+		// METRICS INSTRUMENTATION - Track database errors
+		// ============================================================================
+		// Increment error counter for database failures:
+		//   metrics.JobsSubmittedErrors.WithLabelValues("database").Inc()
+		// Also track gRPC error (if using GRPCRequests metric):
+		//   metrics.GRPCRequests.WithLabelValues("SubmitJob", "error").Inc()
+		metrics.JobsSubmittedErrors.WithLabelValues("database").Inc()
+		metrics.GRPCRequests.WithLabelValues("SubmitJob", "error").Inc()
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to check if job exists: %v", err))
 	}
 
 	if exists {
 		// Job already exists, return existing job_id (idempotent)
+		// Note: This is a successful response (job exists), so we track it as success
+		metrics.GRPCRequests.WithLabelValues("SubmitJob", "success").Inc()
 		return &schedulerv1.SubmitJobResponse{
 			JobId: jobID.String(),
 		}, nil
@@ -226,11 +277,22 @@ func (s *Server) SubmitJob(ctx context.Context, req *schedulerv1.SubmitJobReques
 
 	createdID, alreadyExists, err := db.CreateJob(ctx, s.db, dbJob)
 	if err != nil {
+		// ============================================================================
+		// METRICS INSTRUMENTATION - Track database creation errors
+		// ============================================================================
+		// Increment error counter for database failures:
+		//   metrics.JobsSubmittedErrors.WithLabelValues("database").Inc()
+		// Also track gRPC error (if using GRPCRequests metric):
+		//   metrics.GRPCRequests.WithLabelValues("SubmitJob", "error").Inc()
+		metrics.JobsSubmittedErrors.WithLabelValues("database").Inc()
+		metrics.GRPCRequests.WithLabelValues("SubmitJob", "error").Inc()
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to create job: %v", err))
 	}
 
 	if alreadyExists {
 		// Job was created between our check and insert (race condition handled)
+		// Note: This is a successful response (job exists), so we track it as success
+		metrics.GRPCRequests.WithLabelValues("SubmitJob", "success").Inc()
 		return &schedulerv1.SubmitJobResponse{
 			JobId: createdID.String(),
 		}, nil
@@ -242,8 +304,19 @@ func (s *Server) SubmitJob(ctx context.Context, req *schedulerv1.SubmitJobReques
 		// Log error but don't fail the request (job is already in DB)
 		// This is a design decision: DB is source of truth, Redis is for processing
 		log.Printf("Warning: failed to push job %s to Redis queue: %v", jobID.String(), err)
+		// ============================================================================
+		// METRICS INSTRUMENTATION - Track Redis errors (non-fatal)
+		// ============================================================================
+		metrics.JobsSubmittedErrors.WithLabelValues("redis").Inc()
+		// Note: Job is still successfully created, so we still increment JobsSubmitted below
 		// Optionally, you could return an error here if you want queue failures to fail the request
 	}
+
+	// ============================================================================
+	// METRICS INSTRUMENTATION - Track successful job submission
+	// ============================================================================
+	metrics.JobsSubmitted.WithLabelValues(priorityStr).Inc()
+	metrics.GRPCRequests.WithLabelValues("SubmitJob", "success").Inc()
 
 	// Return job_id
 	return &schedulerv1.SubmitJobResponse{
@@ -253,20 +326,45 @@ func (s *Server) SubmitJob(ctx context.Context, req *schedulerv1.SubmitJobReques
 
 // GetJob retrieves the status of a job
 func (s *Server) GetJob(ctx context.Context, req *schedulerv1.GetJobRequest) (*schedulerv1.JobStatus, error) {
-	// 1. Query CockroachDB for task by job_id
-	// 2. Convert to JobStatus message
-	// 3. Return
+	// ============================================================================
+	// METRICS INSTRUMENTATION - OPTIONAL: Track gRPC request duration
+	// ============================================================================
+	// If you want to track API latency for GetJob:
+	//   start := time.Now()
+	//   defer func() {
+	//       duration := time.Since(start).Seconds()
+	//       metrics.GRPCRequestDuration.WithLabelValues("GetJob").Observe(duration)
+	//   }()
+
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start).Seconds()
+		metrics.GRPCRequestDuration.WithLabelValues("GetJob").Observe(duration)
+	}()
 
 	jobID, err := uuid.Parse(req.JobId)
 	if err != nil {
+		// ============================================================================
+		// METRICS INSTRUMENTATION - Track validation errors (if using GRPCRequests)
+		// ============================================================================
+		//   metrics.GRPCRequests.WithLabelValues("GetJob", "error").Inc()
+		metrics.GRPCRequests.WithLabelValues("GetJob", "error").Inc()
 		return nil, status.Error(codes.InvalidArgument, "job_id must be a valid UUID")
 	}
 
 	job, err := db.GetJobByID(ctx, s.db, jobID)
 	if err != nil {
+		// ============================================================================
+		// METRICS INSTRUMENTATION - Track database errors
+		// ============================================================================
+		metrics.GRPCRequests.WithLabelValues("GetJob", "error").Inc()
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to get job: %v", err))
 	}
 	if job == nil {
+		// ============================================================================
+		// METRICS INSTRUMENTATION - Track not found errors
+		// ============================================================================
+		metrics.GRPCRequests.WithLabelValues("GetJob", "error").Inc()
 		return nil, status.Error(codes.NotFound, "job not found")
 	} 
 
@@ -281,11 +379,26 @@ func (s *Server) GetJob(ctx context.Context, req *schedulerv1.GetJobRequest) (*s
 		FinishedAt: nil,
 	}
 
+	// ============================================================================
+	// METRICS INSTRUMENTATION - Track successful requests
+	// ============================================================================
+	metrics.GRPCRequests.WithLabelValues("GetJob", "success").Inc()
+
 	return &jobStatus, nil
 }
 
 // WatchJob streams job status updates
 func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.SchedulerService_WatchJobServer) error {
+	// ============================================================================
+	// METRICS INSTRUMENTATION - Track gRPC request duration
+	// ============================================================================
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start).Seconds()
+		metrics.GRPCRequestDuration.WithLabelValues("WatchJob").Observe(duration)
+	}()
+	// Note: This measures until the stream ends (when job completes or client disconnects)
+
 	// Step 1: Parse and validate job_id from request
 	// - Extract req.JobId (string)
 	// - Parse to uuid.UUID using uuid.Parse()
@@ -294,6 +407,10 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 
 	jobID, err := uuid.Parse(req.JobId)
 	if err != nil {
+		// ============================================================================
+		// METRICS INSTRUMENTATION - Track validation errors
+		// ============================================================================
+		metrics.GRPCRequests.WithLabelValues("WatchJob", "error").Inc()
 		return status.Error(codes.InvalidArgument, "job_id must be a valid UUID")
 	}
 
@@ -312,6 +429,8 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 	for {
 		select {
 		case <-stream.Context().Done():
+			// Client disconnected - track as success (normal termination)
+			metrics.GRPCRequests.WithLabelValues("WatchJob", "success").Inc()
 			return nil
 		case <-ticker.C:
 			// Time to poll the database and check for status changes
@@ -326,6 +445,7 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 			if err != nil {
 				// Database error occurred
 				log.Printf("Error polling job %s: %v", jobID.String(), err)
+				metrics.GRPCRequests.WithLabelValues("WatchJob", "error").Inc()
 				return fmt.Errorf("failed to poll job: %w", err)
 			}
 
@@ -340,8 +460,10 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 					Attempts:  0,
 				}
 				if err := stream.Send(errorEvent); err != nil {
+					metrics.GRPCRequests.WithLabelValues("WatchJob", "error").Inc()
 					return err
 				}
+				metrics.GRPCRequests.WithLabelValues("WatchJob", "error").Inc()
 				return status.Error(codes.NotFound, "job not found")
 			}
 						
@@ -386,6 +508,7 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 			//    - Otherwise, continue polling
 			if job.Status == "succeeded" || job.Status == "failed" || job.Status == "deadletter" {
 				// Job is complete, exit the polling loop
+				metrics.GRPCRequests.WithLabelValues("WatchJob", "success").Inc()
 				return nil
 			}
 			// Otherwise, continue polling (loop continues)
@@ -397,21 +520,37 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 
 // CancelJob cancels a running job
 func (s *Server) CancelJob(ctx context.Context, req *schedulerv1.CancelJobRequest) (*schedulerv1.CancelJobResponse, error) {
+	// ============================================================================
+	// METRICS INSTRUMENTATION - Track gRPC request duration
+	// ============================================================================
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start).Seconds()
+		metrics.GRPCRequestDuration.WithLabelValues("CancelJob").Observe(duration)
+	}()
 
 	jobId, err := uuid.Parse(req.JobId)
 	if err != nil {
+		// ============================================================================
+		// METRICS INSTRUMENTATION - Track validation errors
+		// ============================================================================
+		metrics.GRPCRequests.WithLabelValues("CancelJob", "error").Inc()
 		return nil, status.Error(codes.InvalidArgument, "job_id must be a valid UUID")
 	}
 
 	job, err := db.GetJobByID(ctx, s.db, jobId)
 	if err != nil {
+		metrics.GRPCRequests.WithLabelValues("CancelJob", "error").Inc()
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to get job: %v", err))
 	}
 	if job == nil {
+		metrics.GRPCRequests.WithLabelValues("CancelJob", "error").Inc()
 		return nil, status.Error(codes.NotFound, "job not found")
 	}
 
 	if job.Status == "succeeded" || job.Status == "failed" || job.Status == "deadletter" || job.Status == "cancelled" {
+		// Job cannot be cancelled (already in terminal state)
+		metrics.GRPCRequests.WithLabelValues("CancelJob", "success").Inc()
 		return &schedulerv1.CancelJobResponse{
 			Cancelled: false,
 		}, nil
@@ -419,6 +558,10 @@ func (s *Server) CancelJob(ctx context.Context, req *schedulerv1.CancelJobReques
 
 	cancelled, err := db.CancelJob(ctx, s.db, jobId)
 	if err != nil {
+		// ============================================================================
+		// METRICS INSTRUMENTATION - Track database errors
+		// ============================================================================
+		metrics.GRPCRequests.WithLabelValues("CancelJob", "error").Inc()
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to cancel job: %v", err))
 	}
 
@@ -444,6 +587,11 @@ func (s *Server) CancelJob(ctx context.Context, req *schedulerv1.CancelJobReques
 		}
 	}
 
+	// ============================================================================
+	// METRICS INSTRUMENTATION - Track successful requests
+	// ============================================================================
+	metrics.GRPCRequests.WithLabelValues("CancelJob", "success").Inc()
+
 	return &schedulerv1.CancelJobResponse{
 		Cancelled: cancelled,
 	}, nil
@@ -451,6 +599,15 @@ func (s *Server) CancelJob(ctx context.Context, req *schedulerv1.CancelJobReques
 
 // ListJobs lists jobs with optional filters
 func (s *Server) ListJobs(ctx context.Context, req *schedulerv1.ListJobsRequest) (*schedulerv1.ListJobsResponse, error) {
+	// ============================================================================
+	// METRICS INSTRUMENTATION - OPTIONAL: Track gRPC request duration
+	// ============================================================================
+	// If you want to track API latency for ListJobs:
+	//   start := time.Now()
+	//   defer func() {
+	//       duration := time.Since(start).Seconds()
+	//       metrics.GRPCRequestDuration.WithLabelValues("ListJobs").Observe(duration)
+	//   }()
 	// 1. Build query with filters (state, priority, type)
 	
 	priorityString := priorityToString(req.PriorityFilter)
@@ -515,6 +672,7 @@ func (s *Server) ListJobs(ctx context.Context, req *schedulerv1.ListJobsRequest)
 	// 3. Execute query and convert results to JobStatus messages
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
+		metrics.GRPCRequests.WithLabelValues("ListJobs", "error").Inc()
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to query jobs: %v", err))
 	}
 	defer rows.Close()
@@ -536,6 +694,7 @@ func (s *Server) ListJobs(ctx context.Context, req *schedulerv1.ListJobsRequest)
 			&job.UpdatedAt,
 		)
 		if err != nil {
+			metrics.GRPCRequests.WithLabelValues("ListJobs", "error").Inc()
 			return nil, status.Error(codes.Internal, fmt.Sprintf("failed to scan job: %v", err))
 		}
 		// Note: nextRunAt is scanned but not used since JobStatus protobuf doesn't include it
@@ -553,6 +712,7 @@ func (s *Server) ListJobs(ctx context.Context, req *schedulerv1.ListJobsRequest)
 	}
 
 	if err := rows.Err(); err != nil {
+		metrics.GRPCRequests.WithLabelValues("ListJobs", "error").Inc()
 		return nil, status.Error(codes.Internal, fmt.Sprintf("error iterating rows: %v", err))
 	}
 
@@ -562,6 +722,11 @@ func (s *Server) ListJobs(ctx context.Context, req *schedulerv1.ListJobsRequest)
 		// There might be more results
 		nextPageToken = strconv.Itoa(offset + pageSize)
 	}
+
+	// ============================================================================
+	// METRICS INSTRUMENTATION - Track successful requests
+	// ============================================================================
+	metrics.GRPCRequests.WithLabelValues("ListJobs", "success").Inc()
 
 	return &schedulerv1.ListJobsResponse{
 		Jobs:          jobs,
