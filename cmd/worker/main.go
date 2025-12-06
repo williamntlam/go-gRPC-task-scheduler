@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/db"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/redis"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/utils"
@@ -24,8 +26,16 @@ import (
 
 const (
 	defaultWorkerPoolSize = 10
-	defaultMetricsPort = 2113
+	defaultMetricsPort    = 2113
 )
+
+func startMetricsServer(port int) {
+	http.Handle("/metrics", promhttp.Handler())
+	log.Printf("Metrics server listening on :%d/metrics", port)
+	if err := http.ListenAndServe(":"+strconv.Itoa(port), nil); err != nil {
+		log.Fatalf("Failed to start metrics server: %v", err)
+	}
+}
 
 func main() {
 	// Step 1: Load .env file if it exists (ignore errors - .env is optional)
@@ -52,7 +62,6 @@ func main() {
 		log.Printf("Invalid METRICS_PORT, using default: %d", defaultMetricsPort)
 		metricsPort = defaultMetricsPort
 	}
-	_ = metricsPort // Reserved for future metrics server implementation
 
 	// Step 3: Initialize CockroachDB connection pool
 	// - Create db.Config struct with env vars:
@@ -121,6 +130,9 @@ func main() {
 	// - Log: log.Printf("Starting worker with pool size: %d", poolSize)
 	log.Printf("Starting worker with pool size: %d", workerPoolSize)
 	go w.Start()
+
+	// Start metrics server (Prometheus HTTP endpoint)
+	go startMetricsServer(metricsPort)
 
 	// Step 8: Handle graceful shutdown
 	waitForShutdown(w)

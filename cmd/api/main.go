@@ -13,6 +13,10 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
+	"net/http"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/db"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/redis"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/utils"
@@ -25,6 +29,14 @@ const (
 	// Default metrics server port (can be overridden via METRICS_PORT env var)
 	defaultMetricsPort = "2112"
 )
+
+func startMetricsServer(port string) {
+    http.Handle("/metrics", promhttp.Handler())
+    log.Printf("Metrics server listening on :%s/metrics", port)
+    if err := http.ListenAndServe(":"+port, nil); err != nil {
+        log.Fatalf("Failed to start metrics server: %v", err)
+    }
+}
 
 func main() {
 	// Load .env file if it exists (ignore errors - .env is optional)
@@ -97,7 +109,7 @@ func main() {
 	}
 
 	log.Printf("Starting gRPC server on :%s", grpcPort)
-	log.Printf("Metrics server will be on :%s (TODO: implement)", metricsPort)
+	log.Printf("Metrics server will be on :%s/metrics", metricsPort)
 
 	// Start server in a goroutine
 	go func() {
@@ -106,8 +118,8 @@ func main() {
 		}
 	}()
 
-	// TODO: Start metrics server (Prometheus HTTP endpoint)
-	// go startMetricsServer(metricsPort)
+	// Start metrics server (Prometheus HTTP endpoint)
+	go startMetricsServer(metricsPort)
 
 	// Wait for interrupt signal for graceful shutdown
 	waitForShutdown(grpcServer)
@@ -145,13 +157,4 @@ func waitForShutdown(grpcServer *grpc.Server) {
 
 	log.Println("Shutdown complete")
 }
-
-// TODO: Implement metrics server
-// func startMetricsServer(port string) {
-// 	http.Handle("/metrics", promhttp.Handler())
-// 	log.Printf("Metrics server listening on :%s/metrics", port)
-// 	if err := http.ListenAndServe(":"+port, nil); err != nil {
-// 		log.Fatalf("Failed to start metrics server: %v", err)
-// 	}
-// }
 
