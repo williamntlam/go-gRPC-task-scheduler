@@ -85,9 +85,12 @@ func (w *Worker) Start() {
 	ctx := w.ctx
 	w.mu.Unlock()
 
+	log.Printf("[Worker] Starting worker with pool size: %d", w.poolSize)
+
 	// Start reaper process to recover stuck jobs from processing queue
 	go w.reaper(ctx)
 	go w.retryPump(ctx)
+	log.Printf("[Worker] Background processes started: reaper and retry pump")
 
 	for {
 		// STEP 5: Add shutdown check at the start of the loop
@@ -151,7 +154,7 @@ func (w *Worker) Start() {
 		// Step 2: Parse job payload JSON
 		var jobPayload redis.JobPayload
 		if err := json.Unmarshal([]byte(jobPayloadJSON), &jobPayload); err != nil {
-			log.Printf("Failed to unmarshal job payload: %v", err)
+			log.Printf("[Worker] Failed to unmarshal job payload: error: %v", err)
 			// Move job back to original queue on parse error
 			w.redisClient.LPush(ctx, sourceQueue, jobPayloadJSON)
 			w.redisClient.LRem(ctx, processingQueue, 1, jobPayloadJSON)
@@ -161,11 +164,13 @@ func (w *Worker) Start() {
 		// Step 3: Parse job ID
 		jobID, err := uuid.Parse(jobPayload.TaskID)
 		if err != nil {
-			log.Printf("Invalid job ID: %v", err)
+			log.Printf("[Worker] Invalid job ID in payload: task_id=%s, error: %v", jobPayload.TaskID, err)
 			// Remove invalid job from processing queue (data corruption, don't retry)
 			w.redisClient.LRem(ctx, processingQueue, 1, jobPayloadJSON)
 			continue
 		}
+
+		log.Printf("[Worker] Processing job: job_id=%s, type=%s, priority=%s", jobID, jobPayload.Type, jobPayload.Priority)
 
 		// STEP 8: Add shutdown check before processing a job
 		// After parsing the job ID but before claiming it, check if shutdown was signaled
@@ -178,7 +183,7 @@ func (w *Worker) Start() {
 		// Step 4: Claim job in database (update status to 'running', increment attempts)
 		claimed, err := w.claimJob(ctx, jobID)
 		if err != nil {
-			log.Printf("Failed to claim job %s: %v", jobID, err)
+			log.Printf("[Worker] Failed to claim job: job_id=%s, error: %v", jobID, err)
 			// Move job back to original queue and remove from processing queue
 			w.redisClient.LPush(ctx, sourceQueue, jobPayloadJSON)
 			w.redisClient.LRem(ctx, processingQueue, 1, jobPayloadJSON)
@@ -186,27 +191,31 @@ func (w *Worker) Start() {
 		}
 		if !claimed {
 			// Job was already claimed by another worker or doesn't exist
-			log.Printf("Job %s was not available to claim (may have been claimed by another worker)", jobID)
+			log.Printf("[Worker] Job not available to claim (may have been claimed by another worker): job_id=%s", jobID)
 			// Remove from processing queue (another worker is handling it)
 			w.redisClient.LRem(ctx, processingQueue, 1, jobPayloadJSON)
 			continue
 		}
 
+		log.Printf("[Worker] Job claimed successfully: job_id=%s", jobID)
+
 		// Step 5: Get full job details from database
 		job, err := db.GetJobByID(ctx, w.dbPool, jobID)
 		if err != nil {
-			log.Printf("Failed to get job %s: %v", jobID, err)
+			log.Printf("[Worker] Failed to get job from database: job_id=%s, error: %v", jobID, err)
 			w.markJobFailed(ctx, jobID, fmt.Sprintf("Failed to get job: %v", err))
 			// Remove from processing queue
 			w.redisClient.LRem(ctx, processingQueue, 1, jobPayloadJSON)
 			continue
 		}
 		if job == nil {
-			log.Printf("Job %s not found in database", jobID)
+			log.Printf("[Worker] Job not found in database: job_id=%s", jobID)
 			// Remove from processing queue
 			w.redisClient.LRem(ctx, processingQueue, 1, jobPayloadJSON)
 			continue
 		}
+
+		log.Printf("[Worker] Job details retrieved: job_id=%s, status=%s, attempts=%d/%d", jobID, job.Status, job.Attempts, job.MaxAttempts)
 
 		// STEP 9: Track in-flight jobs and execute in goroutine
 		// Before executing the handler, call w.wg.Add(1) to increment the WaitGroup
@@ -231,17 +240,18 @@ func (w *Worker) Start() {
 				w.redisClient.LRem(ctx, processingQueue, 1, payloadJSON)
 			}()
 			
+			log.Printf("[Worker] Executing handler: job_id=%s, type=%s", job.TaskID, job.Type)
 			handlerErr := w.executeHandler(ctx, job)
 
 			// Step 7: Update job status based on result
 			if handlerErr != nil {
-				log.Printf("Job %s failed: %v", job.TaskID, handlerErr)
+				log.Printf("[Worker] Job execution failed: job_id=%s, error: %v", job.TaskID, handlerErr)
 				w.handleJobFailure(ctx, job, handlerErr)
 				// Note: Job remains in processing queue until defer removes it
 				// If retry is needed, handleJobFailure will update next_run_at in DB
 				// A separate process can monitor processing queue for stuck jobs
 			} else {
-				log.Printf("Job %s completed successfully", job.TaskID)
+				log.Printf("[Worker] Job execution succeeded: job_id=%s", job.TaskID)
 				w.markJobSucceeded(ctx, job.TaskID)
 				// Job will be removed from processing queue by defer
 			}
@@ -292,12 +302,12 @@ func (w *Worker) reaper(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
 	defer ticker.Stop()
 
-	log.Println("Reaper process started: monitoring processing queue for stuck jobs")
+	log.Println("[Reaper] Reaper process started: monitoring processing queue for stuck jobs")
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Reaper process stopping")
+			log.Println("[Reaper] Reaper process stopping")
 			return
 		case <-ticker.C:
 			w.recoverStuckJobs(ctx, processingQueue, stuckJobTimeout)
@@ -310,7 +320,7 @@ func (w *Worker) recoverStuckJobs(ctx context.Context, processingQueue string, t
 	// Get all items from processing queue
 	items, err := w.redisClient.LRange(ctx, processingQueue, 0, -1).Result()
 	if err != nil {
-		log.Printf("Reaper: Error reading processing queue: %v", err)
+		log.Printf("[Reaper] Error reading processing queue: error: %v", err)
 		return
 	}
 
@@ -318,6 +328,7 @@ func (w *Worker) recoverStuckJobs(ctx context.Context, processingQueue string, t
 		return // No jobs in processing queue
 	}
 
+	log.Printf("[Reaper] Checking processing queue for stuck jobs: queue=%s, items=%d, timeout=%v", processingQueue, len(items), timeout)
 	recoveredCount := 0
 	for _, itemJSON := range items {
 		// Parse job payload to get priority
@@ -337,7 +348,7 @@ func (w *Worker) recoverStuckJobs(ctx context.Context, processingQueue string, t
 		// Get the original priority queue name
 		originalQueue := redis.GetQueueName(jobPayload.Priority)
 		if originalQueue == "" {
-			log.Printf("Reaper: Invalid priority %s for job %s, removing from processing queue", jobPayload.Priority, jobPayload.TaskID)
+			log.Printf("[Reaper] Invalid priority, removing from processing queue: job_id=%s, priority=%s", jobPayload.TaskID, jobPayload.Priority)
 			w.redisClient.LRem(ctx, processingQueue, 1, itemJSON)
 			continue
 		}
@@ -345,7 +356,7 @@ func (w *Worker) recoverStuckJobs(ctx context.Context, processingQueue string, t
 		// Check job status in database
 		jobID, err := uuid.Parse(jobPayload.TaskID)
 		if err != nil {
-			log.Printf("Reaper: Invalid job ID %s, removing from processing queue", jobPayload.TaskID)
+			log.Printf("[Reaper] Invalid job ID, removing from processing queue: task_id=%s, error: %v", jobPayload.TaskID, err)
 			w.redisClient.LRem(ctx, processingQueue, 1, itemJSON)
 			continue
 		}
@@ -375,25 +386,25 @@ func (w *Worker) recoverStuckJobs(ctx context.Context, processingQueue string, t
 			// Check how long job has been running (using updated_at as proxy)
 			timeSinceUpdate := time.Since(job.UpdatedAt)
 			if timeSinceUpdate > timeout {
-				log.Printf("Reaper: Recovering stuck job %s (running for %v), moving back to %s", jobID, timeSinceUpdate, originalQueue)
+				log.Printf("[Reaper] Recovering stuck job: job_id=%s, running_for=%v, moving_back_to=%s", jobID, timeSinceUpdate, originalQueue)
 				w.moveJobBackToQueue(ctx, processingQueue, originalQueue, itemJSON)
 				recoveredCount++
 			}
 		case "queued":
 			// Job status changed back to queued (shouldn't happen, but recover it)
-			log.Printf("Reaper: Job %s status is queued but in processing queue, moving back to %s", jobID, originalQueue)
+			log.Printf("[Reaper] Job status is queued but in processing queue, moving back: job_id=%s, queue=%s", jobID, originalQueue)
 			w.moveJobBackToQueue(ctx, processingQueue, originalQueue, itemJSON)
 			recoveredCount++
 		case "succeeded", "failed", "retry":
 			// If job status is 'succeeded', 'failed', or 'retry', remove from processing queue
 			// (should have been removed by worker, but clean up if not)
-			log.Printf("Reaper: Cleaning up completed job %s from processing queue (status: %s)", jobID, job.Status)
+			log.Printf("[Reaper] Cleaning up completed job from processing queue: job_id=%s, status=%s", jobID, job.Status)
 			w.redisClient.LRem(ctx, processingQueue, 1, itemJSON)
 		}
 	}
 
 	if recoveredCount > 0 {
-		log.Printf("Reaper: Recovered %d stuck job(s) from processing queue", recoveredCount)
+		log.Printf("[Reaper] Recovered %d stuck job(s) from processing queue", recoveredCount)
 	}
 }
 
@@ -460,8 +471,11 @@ func (w *Worker) markJobSucceeded(ctx context.Context, jobID uuid.UUID) error {
 	
 	_, err := w.dbPool.Exec(ctx, query, jobID)
 	if err != nil {
+		log.Printf("[Worker] Failed to mark job as succeeded in database: job_id=%s, error: %v", jobID, err)
 		return fmt.Errorf("failed to mark job as succeeded: %w", err)
 	}
+	
+	log.Printf("[Worker] Job marked as succeeded: job_id=%s", jobID)
 	
 	// STEP: Update task attempt record on success
 	// After marking job as succeeded, update the task_attempts record
@@ -475,7 +489,7 @@ func (w *Worker) markJobSucceeded(ctx context.Context, jobID uuid.UUID) error {
 	//          }
 	
 	if attemptErr := db.UpdateAttemptOnSuccess(ctx, w.dbPool, jobID); attemptErr != nil {
-		log.Printf("Warning: Failed to update task attempt for job %s: %v", jobID, attemptErr)
+		log.Printf("[Worker] Warning: Failed to update task attempt for job: job_id=%s, error: %v", jobID, attemptErr)
 		// Continue anyway - job is succeeded, attempt tracking is secondary
 	}
 	
@@ -492,10 +506,11 @@ func (w *Worker) markJobFailed(ctx context.Context, jobID uuid.UUID, errorMsg st
 	
 	_, err := w.dbPool.Exec(ctx, query, jobID)
 	if err != nil {
+		log.Printf("[Worker] Failed to mark job as failed in database: job_id=%s, error: %v", jobID, err)
 		return fmt.Errorf("failed to mark job as failed: %w", err)
 	}
 	
-	log.Printf("Job %s marked as failed: %s", jobID, errorMsg)
+	log.Printf("[Worker] Job marked as failed: job_id=%s, error: %s", jobID, errorMsg)
 	return nil
 }
 
@@ -527,10 +542,11 @@ func (w *Worker) markJobDeadLetter(ctx context.Context, jobID uuid.UUID, errorMs
 
 	_, err := w.dbPool.Exec(ctx, query, jobID)
 	if err != nil {
+		log.Printf("[Worker] Failed to mark job as deadletter in database: job_id=%s, error: %v", jobID, err)
 		return fmt.Errorf("failed to mark job as deadletter: %w", err)
 	}
 
-	log.Printf("Job %s marked as deadletter: %s", jobID, errorMsg)
+	log.Printf("[Worker] Job marked as deadletter: job_id=%s, error: %s", jobID, errorMsg)
 
 	return nil
 }
@@ -545,15 +561,18 @@ func (w *Worker) markJobRetry(ctx context.Context, jobID uuid.UUID, errorMsg str
 	
 	_, err := w.dbPool.Exec(ctx, query, jobID, nextRunAt)
 	if err != nil {
+		log.Printf("[Worker] Failed to mark job as retry in database: job_id=%s, error: %v", jobID, err)
 		return fmt.Errorf("failed to mark job as retry: %w", err)
 	}
 	
-	log.Printf("Job %s marked for retry at %s (error: %s)", jobID, nextRunAt.Format(time.RFC3339), errorMsg)
+	log.Printf("[Worker] Job marked for retry: job_id=%s, next_run_at=%s, error: %s", jobID, nextRunAt.Format(time.RFC3339), errorMsg)
 	return nil
 }
 
 // handleJobFailure handles job failure, checking if retry is needed
 func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
+	log.Printf("[Worker] Handling job failure: job_id=%s, attempts=%d/%d, error: %v", job.TaskID, job.Attempts, job.MaxAttempts, err)
+
 	// STEP 1: Check if job should be retried
 	// Compare job.Attempts with job.MaxAttempts
 	// If job.Attempts < job.MaxAttempts, we should retry
@@ -598,7 +617,7 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 
 		payloadJSON, marshalErr := json.Marshal(payload)
 		if marshalErr != nil {
-			log.Printf("DLQ: Failed to marshal payload for job %s: %v", job.TaskID, marshalErr)
+			log.Printf("[Worker] DLQ: Failed to marshal payload: job_id=%s, error: %v", job.TaskID, marshalErr)
 			// Still try to update DB even if marshaling fails
 		} else {
 			// STEP 3: Get DLQ queue name
@@ -621,9 +640,9 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 			//          }
 
 			if pushErr := w.redisClient.LPush(ctx, dlqQueueName, payloadJSON).Err(); pushErr != nil {
-				log.Printf("DLQ: Failed to push job %s to DLQ queue %s: %v", job.TaskID, dlqQueueName, pushErr)
+				log.Printf("[Worker] DLQ: Failed to push job to DLQ queue: job_id=%s, queue=%s, error: %v", job.TaskID, dlqQueueName, pushErr)
 			} else {
-				log.Printf("DLQ: Pushed job %s to DLQ queue %s", job.TaskID, dlqQueueName)
+				log.Printf("[Worker] DLQ: Pushed job to DLQ queue: job_id=%s, queue=%s", job.TaskID, dlqQueueName)
 			}
 		}
 
@@ -636,7 +655,7 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 		//          }
 
 		if dbErr := w.markJobDeadLetter(ctx, job.TaskID, originalErrMsg); dbErr != nil {
-			log.Printf("DLQ: Failed to mark job %s as deadletter in DB: %v", job.TaskID, dbErr)
+			log.Printf("[Worker] DLQ: Failed to mark job as deadletter in DB: job_id=%s, error: %v", job.TaskID, dbErr)
 		}
 
 		// STEP 5.5: Update task attempt record on failure (DLQ path)
@@ -651,7 +670,7 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 		//          }
 		
 		if attemptErr := db.UpdateAttemptOnFailure(ctx, w.dbPool, job.TaskID, originalErrMsg); attemptErr != nil {
-			log.Printf("Warning: Failed to update task attempt for job %s: %v", job.TaskID, attemptErr)
+			log.Printf("[Worker] Warning: Failed to update task attempt: job_id=%s, error: %v", job.TaskID, attemptErr)
 			// Continue anyway - job is in DLQ, attempt tracking is secondary
 		}
 
@@ -690,7 +709,8 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 	nextRunAt := time.Now().Add(delay)
 	job.NextRunAt = &nextRunAt
 	
-	log.Printf("Job %s failed (attempt %d/%d), will retry later at %s", job.TaskID, job.Attempts, job.MaxAttempts, nextRunAt.Format(time.RFC3339))
+	log.Printf("[Worker] Job scheduled for retry: job_id=%s, attempt=%d/%d, next_run_at=%s, delay=%v", 
+		job.TaskID, job.Attempts, job.MaxAttempts, nextRunAt.Format(time.RFC3339), delay)
 	w.markJobRetry(ctx, job.TaskID, err.Error(), nextRunAt)
 
 	// STEP 2.5: Update task attempt record on failure (retry path)
@@ -705,7 +725,7 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 	//          }
 	
 	if attemptErr := db.UpdateAttemptOnFailure(ctx, w.dbPool, job.TaskID, err.Error()); attemptErr != nil {
-		log.Printf("Warning: Failed to update task attempt for job %s: %v", job.TaskID, attemptErr)
+		log.Printf("[Worker] Warning: Failed to update task attempt: job_id=%s, error: %v", job.TaskID, attemptErr)
 		// Continue anyway - job is marked for retry, attempt tracking is secondary
 	}
 
@@ -723,7 +743,7 @@ func (w *Worker) executeHandler(ctx context.Context, job *db.Job) error {
 	case "http_call":
 		// STEP 1: Define a struct to parse the HTTP call payload
 		// Define struct to parse the HTTP call payload
-		log.Printf("Executing http_call handler for job %s", job.TaskID)
+		log.Printf("[Worker] Executing http_call handler: job_id=%s", job.TaskID)
 
 		type HTTPCallPayload struct {
 			URL     string            `json:"url"`
@@ -735,8 +755,11 @@ func (w *Worker) executeHandler(ctx context.Context, job *db.Job) error {
 		// Parse job.PayloadJSON into the struct
 		var payload HTTPCallPayload
 		if err := json.Unmarshal(job.PayloadJSON, &payload); err != nil {
+			log.Printf("[Worker] Failed to parse http_call payload: job_id=%s, error: %v", job.TaskID, err)
 			return fmt.Errorf("failed to parse http_call payload: %w", err)
 		}
+
+		log.Printf("[Worker] Making HTTP request: job_id=%s, method=%s, url=%s", job.TaskID, payload.Method, payload.URL)
 
 		// STEP 2: Create HTTP request
 		// Use http.NewRequestWithContext(ctx, method, url, body)
@@ -744,6 +767,7 @@ func (w *Worker) executeHandler(ctx context.Context, job *db.Job) error {
 		
 		request, err := http.NewRequestWithContext(ctx, payload.Method, payload.URL, strings.NewReader(payload.Body))
 		if err != nil {
+			log.Printf("[Worker] Failed to create HTTP request: job_id=%s, error: %v", job.TaskID, err)
 			return fmt.Errorf("failed to create HTTP request: %w", err)
 		}
 		
@@ -762,9 +786,12 @@ func (w *Worker) executeHandler(ctx context.Context, job *db.Job) error {
 
 		response, err := client.Do(request)
 		if err != nil {
+			log.Printf("[Worker] HTTP request failed: job_id=%s, error: %v", job.TaskID, err)
 			return fmt.Errorf("failed to execute HTTP request: %w", err)
 		}
 		defer response.Body.Close()
+
+		log.Printf("[Worker] HTTP request completed: job_id=%s, status_code=%d", job.TaskID, response.StatusCode)
 
 		// STEP 4: Check response
 		// Check resp.StatusCode - if >= 400, return error
@@ -772,12 +799,13 @@ func (w *Worker) executeHandler(ctx context.Context, job *db.Job) error {
 		// Don't forget to close resp.Body with defer resp.Body.Close()
 		
 		if response.StatusCode >= 400 {
+			log.Printf("[Worker] HTTP request returned error status: job_id=%s, status_code=%d", job.TaskID, response.StatusCode)
 			return fmt.Errorf("HTTP request failed with status code %d", response.StatusCode)
 		}
 
 		return nil
 	case "db_tx":
-		log.Printf("Executing db_tx handler for job %s", job.TaskID)
+		log.Printf("[Worker] Executing db_tx handler: job_id=%s", job.TaskID)
 		
 		type DBTxPayload struct {
 			Query  string        `json:"query"`
@@ -786,15 +814,19 @@ func (w *Worker) executeHandler(ctx context.Context, job *db.Job) error {
 
 		var payload DBTxPayload
 		if err := json.Unmarshal(job.PayloadJSON, &payload); err != nil {
+			log.Printf("[Worker] Failed to parse db_tx payload: job_id=%s, error: %v", job.TaskID, err)
 			return fmt.Errorf("failed to parse db_tx payload: %w", err)
 		}
 
 		if payload.Query == "" {
+			log.Printf("[Worker] db_tx payload missing query field: job_id=%s", job.TaskID)
 			return fmt.Errorf("db_tx payload missing required field: query")
 		}
 
+		log.Printf("[Worker] Executing database transaction: job_id=%s", job.TaskID)
 		tx, err := w.dbPool.Begin(ctx)
 		if err != nil {
+			log.Printf("[Worker] Failed to begin transaction: job_id=%s, error: %v", job.TaskID, err)
 			return fmt.Errorf("failed to begin database transaction: %w", err)
 		}
 
@@ -862,7 +894,7 @@ func (w *Worker) retryPump(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Retry pump stopping")
+			log.Println("[RetryPump] Retry pump stopping")
 			return
 		case <-ticker.C:
 			w.processRetryJobs(ctx)
@@ -874,6 +906,7 @@ func (w *Worker) retryPump(ctx context.Context) {
 // processRetryJobs queries the database for jobs ready to be retried and requeues them
 func (w *Worker) processRetryJobs(ctx context.Context) {
 	// STEP 1: Build SQL query to find retry jobs that are ready
+	log.Printf("[RetryPump] Checking for jobs ready to retry")
 	// Query should:
 	//   - Select: task_id, type, priority, payload, attempts, max_attempts
 	//   - Filter: status = 'retry' AND next_run_at IS NOT NULL AND next_run_at <= now()
@@ -902,7 +935,7 @@ func (w *Worker) processRetryJobs(ctx context.Context) {
 
 	rows, err := w.dbPool.Query(ctx, query)
 	if err != nil {
-		log.Printf("Retry pump: Error querying database: %v", err)
+		log.Printf("[RetryPump] Error querying database for retry jobs: %v", err)
 		return
 	}
 
@@ -965,18 +998,19 @@ func (w *Worker) processRetryJobs(ctx context.Context) {
 
 		err := rows.Scan(&taskID, &jobType, &priority, &payloadJSON, &attempts, &maxAttempts)
 		if err != nil {
-			log.Printf("Retry pump: Error scanning row: %v", err)
+			log.Printf("[RetryPump] Error scanning row: error: %v", err)
 			continue
 		}
 
 		if attempts >= maxAttempts {
-			log.Printf("Retry pump: Job %s has exceeded max attempts, marking as failed", taskID)
+			log.Printf("[RetryPump] Job exceeded max attempts, marking as failed: job_id=%s, attempts=%d/%d", taskID, attempts, maxAttempts)
 			w.markJobFailed(ctx, taskID, "Max attempts exceeded")
 			continue
 		}
 
+		log.Printf("[RetryPump] Requeuing job: job_id=%s, type=%s, priority=%s, attempts=%d/%d", taskID, jobType, priority, attempts, maxAttempts)
 		if err := w.requeueRetryJob(ctx, taskID, jobType, priority, payloadJSON); err != nil {
-			log.Printf("Retry pump: Failed to requeue job %s: %v", taskID, err)
+			log.Printf("[RetryPump] Failed to requeue job: job_id=%s, error: %v", taskID, err)
 			continue
 		}
 
@@ -992,7 +1026,7 @@ func (w *Worker) processRetryJobs(ctx context.Context) {
 	//          }
 
 	if err := rows.Err(); err != nil {
-		log.Printf("Retry pump: Error iterating rows: %v", err)
+		log.Printf("[RetryPump] Error iterating rows: error: %v", err)
 		return
 	}
 
@@ -1002,12 +1036,13 @@ func (w *Worker) processRetryJobs(ctx context.Context) {
 	//              log.Printf("Retry pump: Requeued %d job(s)", processedCount)
 	//          }
 	if processedCount > 0 {
-		log.Printf("Retry pump: Requeued %d job(s)", processedCount)
+		log.Printf("[RetryPump] Requeued %d job(s) for retry", processedCount)
 	}
 }
 
 // requeueRetryJob atomically updates job status from 'retry' to 'queued' and pushes it back to Redis queue
 func (w *Worker) requeueRetryJob(ctx context.Context, jobID uuid.UUID, jobType, priority string, payloadJSON json.RawMessage) error {
+	log.Printf("[RetryPump] Requeuing job: job_id=%s, type=%s, priority=%s", jobID, jobType, priority)
 	// STEP 1: Update database status atomically from 'retry' to 'queued'
 	// Use UPDATE with WHERE clause to ensure atomicity and prevent race conditions
 	// Only update if status is still 'retry' (prevents double-processing if multiple workers run)
@@ -1064,8 +1099,11 @@ func (w *Worker) requeueRetryJob(ctx context.Context, jobID uuid.UUID, jobType, 
 	//          }
 
 	if err := redis.PushJob(ctx, w.redisClient, jobID, jobType, priority); err != nil {
+		log.Printf("[RetryPump] Failed to push job to Redis: job_id=%s, error: %v", jobID, err)
 		return fmt.Errorf("failed to push job to redis: %w", err)
 	}
+
+	log.Printf("[RetryPump] Job requeued successfully: job_id=%s, queue=%s", jobID, redis.GetQueueName(priority))
 
 	// STEP 7: Return nil on success
 	// If all steps succeeded, return nil

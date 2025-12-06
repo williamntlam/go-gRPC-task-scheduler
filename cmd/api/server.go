@@ -48,14 +48,10 @@ import (
 
 // Server implements the SchedulerServiceServer interface
 type Server struct {
-	// Embed UnimplementedSchedulerServiceServer for forward compatibility
-	// This ensures your server will work even if new methods are added to the interface
-	schedulerv1.UnimplementedSchedulerServiceServer
 
 	// Database connection pool
 	db *pgxpool.Pool
 	redis *redisc.Client
-	// TODO: Add other dependencies
 	// redis *redis.Client
 	// logger *zap.Logger
 	// metrics *prometheus.Registry
@@ -189,11 +185,14 @@ func (s *Server) SubmitJob(ctx context.Context, req *schedulerv1.SubmitJobReques
 		metrics.GRPCRequestDuration.WithLabelValues("SubmitJob").Observe(duration)
 	}()
 
+	log.Printf("[SubmitJob] Received job submission request: type=%s, priority=%s", req.Job.Type, req.Job.Priority)
+
 	// 1. Validate request
 	if err := validateSubmitJobRequest(req); err != nil {
 		// ============================================================================
 		// METRICS INSTRUMENTATION - Track validation errors
 		// ============================================================================
+		log.Printf("[SubmitJob] Validation failed: %v", err)
 		metrics.JobsSubmittedErrors.WithLabelValues("validation").Inc()
 		metrics.GRPCRequests.WithLabelValues("SubmitJob", "error").Inc()
 		return nil, err
@@ -218,6 +217,7 @@ func (s *Server) SubmitJob(ctx context.Context, req *schedulerv1.SubmitJobReques
 		// Client provided job_id, parse it
 		parsedID, err := uuid.Parse(job.JobId)
 		if err != nil {
+			log.Printf("[SubmitJob] Invalid job_id format provided: %s, error: %v", job.JobId, err)
 			metrics.JobsSubmittedErrors.WithLabelValues("validation").Inc()
 			metrics.GRPCRequests.WithLabelValues("SubmitJob", "error").Inc()
 			return nil, status.Error(codes.InvalidArgument, "job_id must be a valid UUID")
@@ -280,10 +280,7 @@ func (s *Server) SubmitJob(ctx context.Context, req *schedulerv1.SubmitJobReques
 		// ============================================================================
 		// METRICS INSTRUMENTATION - Track database creation errors
 		// ============================================================================
-		// Increment error counter for database failures:
-		//   metrics.JobsSubmittedErrors.WithLabelValues("database").Inc()
-		// Also track gRPC error (if using GRPCRequests metric):
-		//   metrics.GRPCRequests.WithLabelValues("SubmitJob", "error").Inc()
+		log.Printf("[SubmitJob] Failed to create job in database: job_id=%s, error: %v", jobID, err)
 		metrics.JobsSubmittedErrors.WithLabelValues("database").Inc()
 		metrics.GRPCRequests.WithLabelValues("SubmitJob", "error").Inc()
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to create job: %v", err))
@@ -291,6 +288,7 @@ func (s *Server) SubmitJob(ctx context.Context, req *schedulerv1.SubmitJobReques
 
 	if alreadyExists {
 		// Job was created between our check and insert (race condition handled)
+		log.Printf("[SubmitJob] Job created by another request (race condition): job_id=%s", createdID)
 		// Note: This is a successful response (job exists), so we track it as success
 		metrics.GRPCRequests.WithLabelValues("SubmitJob", "success").Inc()
 		return &schedulerv1.SubmitJobResponse{
@@ -298,18 +296,22 @@ func (s *Server) SubmitJob(ctx context.Context, req *schedulerv1.SubmitJobReques
 		}, nil
 	}
 
+	log.Printf("[SubmitJob] Job created successfully: job_id=%s, type=%s, priority=%s", createdID, jobType, priorityStr)
+
 	// Push to Redis queue (LPUSH q:{priority})
 	err = redis.PushJob(ctx, s.redis, jobID, jobType, priorityStr)
 	if err != nil {
 		// Log error but don't fail the request (job is already in DB)
 		// This is a design decision: DB is source of truth, Redis is for processing
-		log.Printf("Warning: failed to push job %s to Redis queue: %v", jobID.String(), err)
+		log.Printf("[SubmitJob] Warning: failed to push job to Redis queue: job_id=%s, queue=%s, error: %v", jobID, priorityStr, err)
 		// ============================================================================
 		// METRICS INSTRUMENTATION - Track Redis errors (non-fatal)
 		// ============================================================================
 		metrics.JobsSubmittedErrors.WithLabelValues("redis").Inc()
 		// Note: Job is still successfully created, so we still increment JobsSubmitted below
 		// Optionally, you could return an error here if you want queue failures to fail the request
+	} else {
+		log.Printf("[SubmitJob] Job pushed to Redis queue: job_id=%s, queue=%s", jobID, priorityStr)
 	}
 
 	// ============================================================================
@@ -317,6 +319,8 @@ func (s *Server) SubmitJob(ctx context.Context, req *schedulerv1.SubmitJobReques
 	// ============================================================================
 	metrics.JobsSubmitted.WithLabelValues(priorityStr).Inc()
 	metrics.GRPCRequests.WithLabelValues("SubmitJob", "success").Inc()
+
+	log.Printf("[SubmitJob] Job submission completed successfully: job_id=%s", jobID)
 
 	// Return job_id
 	return &schedulerv1.SubmitJobResponse{
@@ -405,11 +409,14 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 	// - Handle parsing errors (return gRPC error if invalid)
 	// - Same pattern as GetJob
 
+	log.Printf("[WatchJob] Starting to watch job: job_id=%s", req.JobId)
+
 	jobID, err := uuid.Parse(req.JobId)
 	if err != nil {
 		// ============================================================================
 		// METRICS INSTRUMENTATION - Track validation errors
 		// ============================================================================
+		log.Printf("[WatchJob] Invalid job_id format: %s, error: %v", req.JobId, err)
 		metrics.GRPCRequests.WithLabelValues("WatchJob", "error").Inc()
 		return status.Error(codes.InvalidArgument, "job_id must be a valid UUID")
 	}
@@ -430,6 +437,7 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 		select {
 		case <-stream.Context().Done():
 			// Client disconnected - track as success (normal termination)
+			log.Printf("[WatchJob] Client disconnected: job_id=%s", jobID)
 			metrics.GRPCRequests.WithLabelValues("WatchJob", "success").Inc()
 			return nil
 		case <-ticker.C:
@@ -444,7 +452,7 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 
 			if err != nil {
 				// Database error occurred
-				log.Printf("Error polling job %s: %v", jobID.String(), err)
+				log.Printf("[WatchJob] Error polling job: job_id=%s, error: %v", jobID, err)
 				metrics.GRPCRequests.WithLabelValues("WatchJob", "error").Inc()
 				return fmt.Errorf("failed to poll job: %w", err)
 			}
@@ -452,6 +460,7 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 			// Handle job not found
 			if job == nil {
 				// Job doesn't exist - send error event and return
+				log.Printf("[WatchJob] Job not found: job_id=%s", jobID)
 				errorEvent := &schedulerv1.JobEvent{
 					JobId:     jobID.String(),
 					State:     schedulerv1.JobState_JOB_STATE_UNSPECIFIED,
@@ -460,6 +469,7 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 					Attempts:  0,
 				}
 				if err := stream.Send(errorEvent); err != nil {
+					log.Printf("[WatchJob] Failed to send error event: job_id=%s, error: %v", jobID, err)
 					metrics.GRPCRequests.WithLabelValues("WatchJob", "error").Inc()
 					return err
 				}
@@ -472,6 +482,7 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 			//    - If different (or first poll), proceed to send event
 			
 			if job.Status != lastStatus || firstPoll {
+				log.Printf("[WatchJob] Job status changed: job_id=%s, old_status=%s, new_status=%s, attempts=%d", jobID, lastStatus, job.Status, job.Attempts)
 
 				// 3. Convert to JobEvent
 				//    - Create schedulerv1.JobEvent message
@@ -490,7 +501,7 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 				}
 
 				if err := stream.Send(jobEvent); err != nil {
-					log.Printf("Error streaming job %s: %v", jobID.String(), err)
+					log.Printf("[WatchJob] Failed to send job event: job_id=%s, error: %v", jobID, err)
 					return fmt.Errorf("failed to stream job: %w", err)
 				}
 
@@ -529,27 +540,33 @@ func (s *Server) CancelJob(ctx context.Context, req *schedulerv1.CancelJobReques
 		metrics.GRPCRequestDuration.WithLabelValues("CancelJob").Observe(duration)
 	}()
 
+	log.Printf("[CancelJob] Request received: job_id=%s", req.JobId)
+
 	jobId, err := uuid.Parse(req.JobId)
 	if err != nil {
 		// ============================================================================
 		// METRICS INSTRUMENTATION - Track validation errors
 		// ============================================================================
+		log.Printf("[CancelJob] Invalid job_id format: %s, error: %v", req.JobId, err)
 		metrics.GRPCRequests.WithLabelValues("CancelJob", "error").Inc()
 		return nil, status.Error(codes.InvalidArgument, "job_id must be a valid UUID")
 	}
 
 	job, err := db.GetJobByID(ctx, s.db, jobId)
 	if err != nil {
+		log.Printf("[CancelJob] Database error: job_id=%s, error: %v", jobId, err)
 		metrics.GRPCRequests.WithLabelValues("CancelJob", "error").Inc()
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to get job: %v", err))
 	}
 	if job == nil {
+		log.Printf("[CancelJob] Job not found: job_id=%s", jobId)
 		metrics.GRPCRequests.WithLabelValues("CancelJob", "error").Inc()
 		return nil, status.Error(codes.NotFound, "job not found")
 	}
 
 	if job.Status == "succeeded" || job.Status == "failed" || job.Status == "deadletter" || job.Status == "cancelled" {
 		// Job cannot be cancelled (already in terminal state)
+		log.Printf("[CancelJob] Job already in terminal state, cannot cancel: job_id=%s, status=%s", jobId, job.Status)
 		metrics.GRPCRequests.WithLabelValues("CancelJob", "success").Inc()
 		return &schedulerv1.CancelJobResponse{
 			Cancelled: false,
@@ -581,7 +598,9 @@ func (s *Server) CancelJob(ctx context.Context, req *schedulerv1.CancelJobReques
 				// Remove from Redis queue (LREM removes all matching values)
 				// Log error but don't fail - DB is source of truth, job is already cancelled
 				if err := s.redis.LRem(ctx, queueName, 0, payloadJSON).Err(); err != nil {
-					log.Printf("Warning: failed to remove job %s from Redis queue: %v", jobId.String(), err)
+					log.Printf("[CancelJob] Warning: failed to remove job from Redis queue: job_id=%s, queue=%s, error: %v", jobId, queueName, err)
+				} else {
+					log.Printf("[CancelJob] Job removed from Redis queue: job_id=%s, queue=%s", jobId, queueName)
 				}
 			}
 		}
@@ -592,6 +611,8 @@ func (s *Server) CancelJob(ctx context.Context, req *schedulerv1.CancelJobReques
 	// ============================================================================
 	metrics.GRPCRequests.WithLabelValues("CancelJob", "success").Inc()
 
+	log.Printf("[CancelJob] Cancel job completed: job_id=%s, cancelled=%v", jobId, cancelled)
+
 	return &schedulerv1.CancelJobResponse{
 		Cancelled: cancelled,
 	}, nil
@@ -600,14 +621,17 @@ func (s *Server) CancelJob(ctx context.Context, req *schedulerv1.CancelJobReques
 // ListJobs lists jobs with optional filters
 func (s *Server) ListJobs(ctx context.Context, req *schedulerv1.ListJobsRequest) (*schedulerv1.ListJobsResponse, error) {
 	// ============================================================================
-	// METRICS INSTRUMENTATION - OPTIONAL: Track gRPC request duration
+	// METRICS INSTRUMENTATION - Track gRPC request duration
 	// ============================================================================
-	// If you want to track API latency for ListJobs:
-	//   start := time.Now()
-	//   defer func() {
-	//       duration := time.Since(start).Seconds()
-	//       metrics.GRPCRequestDuration.WithLabelValues("ListJobs").Observe(duration)
-	//   }()
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start).Seconds()
+		metrics.GRPCRequestDuration.WithLabelValues("ListJobs").Observe(duration)
+	}()
+
+	log.Printf("[ListJobs] Request received: state_filter=%v, priority_filter=%v, type_filter=%s, page_size=%d, page_token=%s",
+		req.StateFilter, req.PriorityFilter, req.TypeFilter, req.PageSize, req.PageToken)
+
 	// 1. Build query with filters (state, priority, type)
 	
 	priorityString := priorityToString(req.PriorityFilter)
@@ -670,8 +694,10 @@ func (s *Server) ListJobs(ctx context.Context, req *schedulerv1.ListJobsRequest)
 	args = append(args, offset)
 
 	// 3. Execute query and convert results to JobStatus messages
+	log.Printf("[ListJobs] Executing query with filters: page_size=%d, offset=%d", pageSize, offset)
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
+		log.Printf("[ListJobs] Query failed: error: %v", err)
 		metrics.GRPCRequests.WithLabelValues("ListJobs", "error").Inc()
 		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to query jobs: %v", err))
 	}
@@ -694,6 +720,7 @@ func (s *Server) ListJobs(ctx context.Context, req *schedulerv1.ListJobsRequest)
 			&job.UpdatedAt,
 		)
 		if err != nil {
+			log.Printf("[ListJobs] Failed to scan job row: error: %v", err)
 			metrics.GRPCRequests.WithLabelValues("ListJobs", "error").Inc()
 			return nil, status.Error(codes.Internal, fmt.Sprintf("failed to scan job: %v", err))
 		}
@@ -712,6 +739,7 @@ func (s *Server) ListJobs(ctx context.Context, req *schedulerv1.ListJobsRequest)
 	}
 
 	if err := rows.Err(); err != nil {
+		log.Printf("[ListJobs] Error iterating rows: error: %v", err)
 		metrics.GRPCRequests.WithLabelValues("ListJobs", "error").Inc()
 		return nil, status.Error(codes.Internal, fmt.Sprintf("error iterating rows: %v", err))
 	}
@@ -727,6 +755,8 @@ func (s *Server) ListJobs(ctx context.Context, req *schedulerv1.ListJobsRequest)
 	// METRICS INSTRUMENTATION - Track successful requests
 	// ============================================================================
 	metrics.GRPCRequests.WithLabelValues("ListJobs", "success").Inc()
+
+	log.Printf("[ListJobs] Query completed: found %d jobs, next_page_token=%s", len(jobs), nextPageToken)
 
 	return &schedulerv1.ListJobsResponse{
 		Jobs:          jobs,
