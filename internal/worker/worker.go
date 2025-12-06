@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	redisc "github.com/redis/go-redis/v9"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/db"
+	"github.com/williamntlam/go-grpc-task-scheduler/internal/metrics"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/redis"
 )
 
@@ -234,6 +235,10 @@ func (w *Worker) Start() {
 		go func(job *db.Job, payloadJSON string, originalQueue string) {
 			defer w.wg.Done()
 			
+			// Track in-flight jobs metric
+			metrics.WorkerInflightJobs.Inc()
+			defer metrics.WorkerInflightJobs.Dec()
+			
 			// Clean up processing queue after job completes (success or failure)
 			defer func() {
 				// Remove job from processing queue
@@ -365,7 +370,7 @@ func (w *Worker) recoverStuckJobs(ctx context.Context, processingQueue string, t
 		// If status changed, another worker might have handled it
 		job, err := db.GetJobByID(ctx, w.dbPool, jobID)
 		if err != nil {
-			log.Printf("Reaper: Error checking job %s status: %v", jobID, err)
+			log.Printf("[Reaper] Error checking job status: job_id=%s, error: %v", jobID, err)
 			// Move back to original queue on error
 			w.moveJobBackToQueue(ctx, processingQueue, originalQueue, itemJSON)
 			recoveredCount++
@@ -388,12 +393,16 @@ func (w *Worker) recoverStuckJobs(ctx context.Context, processingQueue string, t
 			if timeSinceUpdate > timeout {
 				log.Printf("[Reaper] Recovering stuck job: job_id=%s, running_for=%v, moving_back_to=%s", jobID, timeSinceUpdate, originalQueue)
 				w.moveJobBackToQueue(ctx, processingQueue, originalQueue, itemJSON)
+				// Track recovered job
+				metrics.ReaperJobsRecovered.WithLabelValues(job.Priority).Inc()
 				recoveredCount++
 			}
 		case "queued":
 			// Job status changed back to queued (shouldn't happen, but recover it)
 			log.Printf("[Reaper] Job status is queued but in processing queue, moving back: job_id=%s, queue=%s", jobID, originalQueue)
 			w.moveJobBackToQueue(ctx, processingQueue, originalQueue, itemJSON)
+			// Track recovered job
+			metrics.ReaperJobsRecovered.WithLabelValues(job.Priority).Inc()
 			recoveredCount++
 		case "succeeded", "failed", "retry":
 			// If job status is 'succeeded', 'failed', or 'retry', remove from processing queue
@@ -492,6 +501,9 @@ func (w *Worker) markJobSucceeded(ctx context.Context, jobID uuid.UUID) error {
 		log.Printf("[Worker] Warning: Failed to update task attempt for job: job_id=%s, error: %v", jobID, attemptErr)
 		// Continue anyway - job is succeeded, attempt tracking is secondary
 	}
+	
+	// Track successful job processing
+	metrics.JobsProcessed.WithLabelValues("success").Inc()
 	
 	return nil
 }
@@ -733,6 +745,13 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 
 // executeHandler executes the job handler based on job type
 func (w *Worker) executeHandler(ctx context.Context, job *db.Job) error {
+	// Track job processing duration
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start).Seconds()
+		metrics.JobProcessingDuration.WithLabelValues(job.Type).Observe(duration)
+	}()
+
 	// STEP 1: Use a switch statement on job.Type to handle different job types
 	// noop, http_capp, db_tx
 
