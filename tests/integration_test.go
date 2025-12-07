@@ -90,6 +90,9 @@ func TestEndToEndJobFlow(t *testing.T) {
 	})
 
 	t.Run("job retry flow", func(t *testing.T) {
+		// Create a new worker for this test to avoid conflicts
+		w2 := worker.NewWorker(dbPool, redisClient, 2)
+		
 		// Create a job that will fail
 		jobID := uuid.New()
 		job := db.Job{
@@ -111,22 +114,34 @@ func TestEndToEndJobFlow(t *testing.T) {
 
 		// Start worker
 		_, workerCancel := context.WithCancel(context.Background())
-		go w.Start()
+		go w2.Start()
 
-		// Wait a bit
-		time.Sleep(1 * time.Second)
+		// Wait for job to be processed (poll for status change)
+		maxWait := 5 * time.Second
+		checkInterval := 100 * time.Millisecond
+		deadline := time.Now().Add(maxWait)
+		var retrievedJob *db.Job
+		for time.Now().Before(deadline) {
+			retrievedJob, err = db.GetJobByID(ctx, dbPool, jobID)
+			require.NoError(t, err)
+			require.NotNil(t, retrievedJob)
+			// Job should be processed (noop succeeds immediately)
+			if retrievedJob.Status == "succeeded" || retrievedJob.Status == "running" {
+				break
+			}
+			time.Sleep(checkInterval)
+		}
 
-		// Verify job was attempted
-		retrievedJob, err := db.GetJobByID(ctx, dbPool, jobID)
-		require.NoError(t, err)
-		require.NotNil(t, retrievedJob)
-		// Job should be processed (noop succeeds immediately)
-		assert.Contains(t, []string{"succeeded", "running"}, retrievedJob.Status)
+		// Verify job was processed
+		// Note: For retry flow test, we're just verifying the job was processed
+		// The actual retry logic would require a failing handler
+		assert.Contains(t, []string{"succeeded", "running"}, retrievedJob.Status,
+			"Job should be processed, but status is %s", retrievedJob.Status)
 
 		workerCancel()
 		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		w.Stop(stopCtx)
+		w2.Stop(stopCtx)
 	})
 }
 

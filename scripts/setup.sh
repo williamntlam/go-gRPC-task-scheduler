@@ -77,6 +77,48 @@ SHOW TABLES;
 EOF
 
 echo ""
+echo "📦 Creating test database and schema..."
+
+# Create test database with same schema
+docker exec -i cockroachdb ./cockroach sql --insecure <<EOF
+-- Create test database
+CREATE DATABASE IF NOT EXISTS scheduler_test;
+
+-- Use the test database
+USE scheduler_test;
+
+-- Create tasks table
+CREATE TABLE IF NOT EXISTS tasks (
+    task_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    type STRING NOT NULL,
+    priority STRING NOT NULL,
+    payload JSONB,
+    status STRING NOT NULL DEFAULT 'queued',
+    attempts INT DEFAULT 0,
+    max_attempts INT DEFAULT 3,
+    next_run_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Create task_attempts table
+CREATE TABLE IF NOT EXISTS task_attempts (
+    task_id UUID NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL,
+    finished_at TIMESTAMPTZ,
+    ok BOOLEAN,
+    error STRING,
+    PRIMARY KEY (task_id, started_at),
+    FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
+);
+
+-- Create indexes for performance
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status) WHERE status IN ('queued', 'running');
+CREATE INDEX IF NOT EXISTS idx_tasks_next_run_at ON tasks(next_run_at) WHERE status = 'retry';
+CREATE INDEX IF NOT EXISTS idx_tasks_priority_status ON tasks(priority, status);
+EOF
+
+echo ""
 echo "✅ Setup complete!"
 echo ""
 echo "📊 Services:"

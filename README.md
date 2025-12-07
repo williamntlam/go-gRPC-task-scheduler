@@ -381,6 +381,13 @@ make clean        # Stop and remove volumes
 make migrate      # Run database migrations
 make status       # Check service status
 make logs         # View service logs
+
+# Testing commands
+make test         # Setup test infrastructure (CockroachDB + Redis only) and run tests
+make test CLEAN=true  # Run tests and clean up infrastructure afterwards
+make test-setup   # Setup test infrastructure only (CockroachDB + Redis)
+make test-down    # Stop test infrastructure
+make test-clean   # Stop and remove test infrastructure containers
 ```
 
 ### Building
@@ -397,6 +404,27 @@ go build -o bin/worker ./cmd/worker
 
 ### Running Tests
 
+**Recommended: Use the Makefile target** (starts only test infrastructure):
+```bash
+# Run all tests (starts only CockroachDB + Redis, not Prometheus/Grafana)
+# Includes a summary with pass/fail counts at the end
+make test
+
+# Run tests and clean up infrastructure afterwards
+make test CLEAN=true
+
+# Setup test infrastructure only (without running tests)
+make test-setup
+```
+
+The test output includes a summary at the end showing:
+- Number of tests passed ✅
+- Number of tests failed ❌
+- Number of tests skipped ⏭️ (if any)
+- Total number of tests
+- Overall status (SUCCESS/FAILED)
+
+**Manual testing** (requires infrastructure to be running):
 ```bash
 # Run all tests
 go test ./tests/... -v
@@ -408,6 +436,16 @@ go test ./tests/... -run TestGetJobByID -v
 go test ./tests/... -coverprofile=coverage.out
 go tool cover -html=coverage.out
 ```
+
+### Test Infrastructure
+
+The test infrastructure includes:
+- **CockroachDB**: For database tests (uses `scheduler_test` database)
+- **Redis**: For queue tests (uses DB 1 to avoid conflicts)
+
+Test infrastructure does NOT include:
+- Prometheus (not needed for tests)
+- Grafana (not needed for tests)
 
 ### Test Structure
 

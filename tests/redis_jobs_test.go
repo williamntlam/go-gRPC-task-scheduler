@@ -99,7 +99,13 @@ func TestPushJob(t *testing.T) {
 	t.Run("pushes to different priority queues", func(t *testing.T) {
 		priorities := []string{"critical", "high", "default", "low"}
 
-		for i, priority := range priorities {
+		// Clean up queues before starting
+		for _, priority := range priorities {
+			queueName := redis.GetQueueName(priority)
+			testRedisClient.Del(ctx, queueName)
+		}
+
+		for _, priority := range priorities {
 			jobID := uuid.New()
 			err := redis.PushJob(ctx, testRedisClient, jobID, "noop", priority)
 			require.NoError(t, err)
@@ -107,7 +113,8 @@ func TestPushJob(t *testing.T) {
 			queueName := redis.GetQueueName(priority)
 			length, err := testRedisClient.LLen(ctx, queueName).Result()
 			require.NoError(t, err)
-			assert.Equal(t, int64(i+1), length)
+			// Each queue should have exactly 1 job after pushing
+			assert.Equal(t, int64(1), length, "Queue %s should have exactly 1 job", priority)
 		}
 	})
 
@@ -121,6 +128,9 @@ func TestPushJob(t *testing.T) {
 	t.Run("handles multiple jobs in same queue", func(t *testing.T) {
 		priority := "default"
 		queueName := redis.GetQueueName(priority)
+
+		// Clean up queue before starting
+		testRedisClient.Del(ctx, queueName)
 
 		// Push multiple jobs
 		for i := 0; i < 5; i++ {
@@ -160,11 +170,20 @@ func TestPushJob(t *testing.T) {
 		jobID := uuid.New()
 		jobType := "http_call"
 		priority := "critical"
+		queueName := redis.GetQueueName(priority)
+
+		// Clean up queue before starting to ensure we get the right job
+		testRedisClient.Del(ctx, queueName)
 
 		err := redis.PushJob(ctx, testRedisClient, jobID, jobType, priority)
 		require.NoError(t, err)
 
-		queueName := redis.GetQueueName(priority)
+		// Verify queue has exactly one job
+		length, err := testRedisClient.LLen(ctx, queueName).Result()
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), length, "Queue should have exactly 1 job")
+
+		// Pop the job we just pushed
 		payloadJSON, err := testRedisClient.RPop(ctx, queueName).Result()
 		require.NoError(t, err)
 
@@ -223,6 +242,12 @@ func TestPushJobConcurrency(t *testing.T) {
 		priorities := []string{"critical", "high", "default", "low"}
 		jobsPerQueue := 25
 
+		// Clean up all queues before starting
+		for _, priority := range priorities {
+			queueName := redis.GetQueueName(priority)
+			testRedisClient.Del(ctx, queueName)
+		}
+
 		errors := make(chan error, len(priorities)*jobsPerQueue)
 		for _, priority := range priorities {
 			for i := 0; i < jobsPerQueue; i++ {
@@ -249,7 +274,7 @@ func TestPushJobConcurrency(t *testing.T) {
 			queueName := redis.GetQueueName(priority)
 			length, err := testRedisClient.LLen(ctx, queueName).Result()
 			require.NoError(t, err)
-			assert.Equal(t, int64(jobsPerQueue), length)
+			assert.Equal(t, int64(jobsPerQueue), length, "Queue %s should have exactly %d jobs", priority, jobsPerQueue)
 		}
 	})
 }

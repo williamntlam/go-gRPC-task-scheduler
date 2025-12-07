@@ -328,6 +328,65 @@ func TestCancelJob(t *testing.T) {
 	})
 }
 
+func TestDatabaseConnectionErrors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("handles CockroachDB connection errors - invalid port", func(t *testing.T) {
+		// Create invalid database connection pool with invalid port
+		invalidConfig := db.Config{
+			Host:     "localhost",
+			Port:     "9999", // Invalid port
+			User:     "root",
+			Password: "",
+			Database: "scheduler_test",
+			SSLMode:  "disable",
+		}
+
+		// Try to create pool with invalid connection - should fail during creation
+		invalidPool, err := db.NewPool(ctx, invalidConfig)
+		assert.Error(t, err, "NewPool should fail with invalid connection parameters")
+		assert.Nil(t, invalidPool, "Pool should be nil when creation fails")
+		// Verify error message contains connection-related information
+		if err != nil {
+			assert.Contains(t, err.Error(), "failed to", "Error should indicate connection failure")
+		}
+	})
+
+	t.Run("handles CockroachDB connection errors - invalid host", func(t *testing.T) {
+		// Create invalid database connection pool with invalid host
+		invalidConfig := db.Config{
+			Host:     "invalid-host-that-does-not-exist",
+			Port:     "26257",
+			User:     "root",
+			Password: "",
+			Database: "scheduler_test",
+			SSLMode:  "disable",
+		}
+
+		// Try to create pool with invalid connection - should fail during creation
+		invalidPool, err := db.NewPool(ctx, invalidConfig)
+		assert.Error(t, err, "NewPool should fail with invalid host")
+		assert.Nil(t, invalidPool, "Pool should be nil when creation fails")
+	})
+
+	t.Run("handles CockroachDB connection errors - invalid database", func(t *testing.T) {
+		// Create invalid database connection pool with non-existent database
+		invalidConfig := db.Config{
+			Host:     "localhost",
+			Port:     "26257",
+			User:     "root",
+			Password: "",
+			Database: "nonexistent_database_12345",
+			SSLMode:  "disable",
+		}
+
+		// Try to create pool with invalid connection - should fail during creation
+		invalidPool, err := db.NewPool(ctx, invalidConfig)
+		assert.Error(t, err, "NewPool should fail with non-existent database")
+		assert.Nil(t, invalidPool, "Pool should be nil when creation fails")
+	})
+}
+
 func TestCreateJobConcurrency(t *testing.T) {
 	ctx := context.Background()
 
