@@ -123,11 +123,17 @@ The system is designed for reliability, with features like:
 
 ## Getting Started
 
+> **📖 New to this project?** Start with the [QUICKSTART.md](QUICKSTART.md) guide for a step-by-step walkthrough!
+
 ### Prerequisites
 
 - Go 1.24 or later
 - Docker and Docker Compose
 - Make (optional, for convenience commands)
+- `grpcurl` (for job submission scripts)
+  ```bash
+  go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
+  ```
 
 ### Quick Start
 
