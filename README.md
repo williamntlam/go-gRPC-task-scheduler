@@ -117,7 +117,9 @@ The system is designed for reliability, with features like:
 - **Queue**: Redis 7
 - **Metrics**: Prometheus
 - **Visualization**: Grafana
-- **Testing**: testify, testutil
+- **Testing**: 
+  - `testify` - Third-party testing framework for assertions and test utilities
+  - `testutil` - Project-specific package for test setup/cleanup (database, Redis)
 
 ## Getting Started
 
