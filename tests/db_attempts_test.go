@@ -342,7 +342,9 @@ func TestUpdateAttemptOnFailure(t *testing.T) {
 }
 
 func TestDatabaseConnectionErrorsAttempts(t *testing.T) {
-	ctx := context.Background()
+	// Use a timeout context to prevent tests from hanging
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	t.Run("handles CockroachDB connection errors - InsertAttempt", func(t *testing.T) {
 		// Create invalid database connection pool with invalid port
@@ -361,14 +363,17 @@ func TestDatabaseConnectionErrorsAttempts(t *testing.T) {
 		assert.Nil(t, invalidPool, "Pool should be nil when creation fails")
 		// Verify error message contains connection-related information
 		if err != nil {
-			assert.Contains(t, err.Error(), "failed to", "Error should indicate connection failure")
+			// Error could be from ping, connection, or parsing
+			assert.True(t,
+				containsAnyAttempts(err.Error(), []string{"failed to", "connection", "refused", "timeout", "dial"}),
+				"Error should indicate connection failure, got: %s", err.Error())
 		}
 	})
 
 	t.Run("handles CockroachDB connection errors - UpdateAttemptOnSuccess", func(t *testing.T) {
 		// Create invalid database connection pool with invalid host
 		invalidConfig := db.Config{
-			Host:     "invalid-host-that-does-not-exist",
+			Host:     "invalid-host-that-does-not-exist-12345",
 			Port:     "26257",
 			User:     "root",
 			Password: "",
@@ -380,6 +385,12 @@ func TestDatabaseConnectionErrorsAttempts(t *testing.T) {
 		invalidPool, err := db.NewPool(ctx, invalidConfig)
 		assert.Error(t, err, "NewPool should fail with invalid host")
 		assert.Nil(t, invalidPool, "Pool should be nil when creation fails")
+		// Verify error indicates connection failure
+		if err != nil {
+			assert.True(t,
+				containsAnyAttempts(err.Error(), []string{"failed to", "connection", "no such host", "timeout", "dial"}),
+				"Error should indicate connection failure, got: %s", err.Error())
+		}
 	})
 
 	t.Run("handles CockroachDB connection errors - UpdateAttemptOnFailure", func(t *testing.T) {
@@ -397,7 +408,23 @@ func TestDatabaseConnectionErrorsAttempts(t *testing.T) {
 		invalidPool, err := db.NewPool(ctx, invalidConfig)
 		assert.Error(t, err, "NewPool should fail with non-existent database")
 		assert.Nil(t, invalidPool, "Pool should be nil when creation fails")
+		// Verify error indicates database doesn't exist
+		if err != nil {
+			assert.True(t,
+				containsAnyAttempts(err.Error(), []string{"failed to", "database", "does not exist", "ping"}),
+				"Error should indicate database failure, got: %s", err.Error())
+		}
 	})
+}
+
+// Helper function to check if string contains any of the substrings
+func containsAnyAttempts(s string, substrings []string) bool {
+	for _, substr := range substrings {
+		if strings.Contains(s, substr) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestAttemptLifecycle(t *testing.T) {
