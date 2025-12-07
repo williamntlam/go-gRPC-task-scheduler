@@ -53,10 +53,10 @@ func TestEndToEndJobFlow(t *testing.T) {
 		require.NoError(t, err)
 
 		// 2. Verify job in database
-		job, err := db.GetJobByID(ctx, dbPool, jobID)
+		retrievedJob, err := db.GetJobByID(ctx, dbPool, jobID)
 		require.NoError(t, err)
-		require.NotNil(t, job)
-		assert.Equal(t, "queued", job.Status)
+		require.NotNil(t, retrievedJob)
+		assert.Equal(t, "queued", retrievedJob.Status)
 
 		// 3. Push job to Redis queue
 		err = redis.PushJob(ctx, redisClient, jobID, "noop", "high")
@@ -69,17 +69,18 @@ func TestEndToEndJobFlow(t *testing.T) {
 		assert.Greater(t, length, int64(0))
 
 		// 4. Start worker and process job
-		workerCtx, workerCancel := context.WithCancel(context.Background())
+		_, workerCancel := context.WithCancel(context.Background())
 		go w.Start()
 
 		// Wait for job to be processed
 		time.Sleep(2 * time.Second)
 
 		// 5. Verify job was processed
-		job, err = db.GetJobByID(ctx, dbPool, jobID)
+		retrievedJob, err = db.GetJobByID(ctx, dbPool, jobID)
 		require.NoError(t, err)
+		require.NotNil(t, retrievedJob)
 		// Job should be succeeded (for noop) or still processing
-		assert.Contains(t, []string{"succeeded", "running"}, job.Status)
+		assert.Contains(t, []string{"succeeded", "running"}, retrievedJob.Status)
 
 		// Stop worker
 		workerCancel()
@@ -109,17 +110,18 @@ func TestEndToEndJobFlow(t *testing.T) {
 		require.NoError(t, err)
 
 		// Start worker
-		workerCtx, workerCancel := context.WithCancel(context.Background())
+		_, workerCancel := context.WithCancel(context.Background())
 		go w.Start()
 
 		// Wait a bit
 		time.Sleep(1 * time.Second)
 
 		// Verify job was attempted
-		job, err := db.GetJobByID(ctx, dbPool, jobID)
+		retrievedJob, err := db.GetJobByID(ctx, dbPool, jobID)
 		require.NoError(t, err)
+		require.NotNil(t, retrievedJob)
 		// Job should be processed (noop succeeds immediately)
-		assert.Contains(t, []string{"succeeded", "running"}, job.Status)
+		assert.Contains(t, []string{"succeeded", "running"}, retrievedJob.Status)
 
 		workerCancel()
 		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -335,9 +337,10 @@ func TestJobCancellationFlow(t *testing.T) {
 		assert.True(t, cancelled)
 
 		// Verify job status
-		job, err := db.GetJobByID(ctx, dbPool, jobID)
+		retrievedJob, err := db.GetJobByID(ctx, dbPool, jobID)
 		require.NoError(t, err)
-		assert.Equal(t, "cancelled", job.Status)
+		require.NotNil(t, retrievedJob)
+		assert.Equal(t, "cancelled", retrievedJob.Status)
 
 		// Verify job removed from queue (or at least queue length changed)
 		lengthAfter, _ := redisClient.LLen(ctx, queueName).Result()

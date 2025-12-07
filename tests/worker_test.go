@@ -63,7 +63,7 @@ func teardownWorkerTest(t *testing.T) {
 
 func TestWorkerClaimJob(t *testing.T) {
 	ctx := context.Background()
-	w, stop := setupWorkerTest(t)
+	_, stop := setupWorkerTest(t)
 	defer stop()
 	defer teardownWorkerTest(t)
 
@@ -115,7 +115,7 @@ func TestWorkerClaimJob(t *testing.T) {
 
 func TestWorkerMarkJobSucceeded(t *testing.T) {
 	ctx := context.Background()
-	w, stop := setupWorkerTest(t)
+	_, stop := setupWorkerTest(t)
 	defer stop()
 	defer teardownWorkerTest(t)
 
@@ -147,7 +147,7 @@ func TestWorkerMarkJobSucceeded(t *testing.T) {
 
 func TestWorkerHandleJobFailure(t *testing.T) {
 	ctx := context.Background()
-	w, stop := setupWorkerTest(t)
+	_, stop := setupWorkerTest(t)
 	defer stop()
 	defer teardownWorkerTest(t)
 
@@ -200,7 +200,7 @@ func TestWorkerHandleJobFailure(t *testing.T) {
 
 func TestWorkerExecuteHandler(t *testing.T) {
 	ctx := context.Background()
-	w, stop := setupWorkerTest(t)
+	_, stop := setupWorkerTest(t)
 	defer stop()
 	defer teardownWorkerTest(t)
 
@@ -278,7 +278,7 @@ func TestWorkerExecuteHandler(t *testing.T) {
 
 func TestWorkerRetryPump(t *testing.T) {
 	ctx := context.Background()
-	w, stop := setupWorkerTest(t)
+	_, stop := setupWorkerTest(t)
 	defer stop()
 	defer teardownWorkerTest(t)
 
@@ -327,7 +327,7 @@ func TestWorkerRetryPump(t *testing.T) {
 
 func TestWorkerReaper(t *testing.T) {
 	ctx := context.Background()
-	w, stop := setupWorkerTest(t)
+	_, stop := setupWorkerTest(t)
 	defer stop()
 	defer teardownWorkerTest(t)
 
@@ -370,8 +370,7 @@ func TestWorkerReaper(t *testing.T) {
 }
 
 func TestWorkerGracefulShutdown(t *testing.T) {
-	ctx := context.Background()
-	w, stop := setupWorkerTest(t)
+	w, _ := setupWorkerTest(t)
 	defer teardownWorkerTest(t)
 
 	t.Run("stops gracefully", func(t *testing.T) {

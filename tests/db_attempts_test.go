@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -43,30 +42,6 @@ func teardownAttemptsTest(t *testing.T) {
 	if err := testutil.CleanupTestDB(ctx, testPoolAttempts); err != nil {
 		t.Fatalf("Failed to cleanup test database: %v", err)
 	}
-}
-	ctx := context.Background()
-	cfg := testutil.GetTestConfig()
-
-	var err error
-	testPoolAttempts, err = testutil.SetupTestDB(ctx, cfg)
-	if err != nil {
-		panic(fmt.Sprintf("Failed to setup test database: %v", err))
-	}
-	defer testPoolAttempts.Close()
-
-	// Cleanup before running tests
-	if err := testutil.CleanupTestDB(ctx, testPoolAttempts); err != nil {
-		panic(fmt.Sprintf("Failed to cleanup test database: %v", err))
-	}
-
-	code := m.Run()
-
-	// Cleanup after tests
-	if err := testutil.CleanupTestDB(ctx, testPoolAttempts); err != nil {
-		panic(fmt.Sprintf("Failed to cleanup test database: %v", err))
-	}
-
-	os.Exit(code)
 }
 
 func TestInsertAttempt(t *testing.T) {

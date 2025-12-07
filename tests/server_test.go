@@ -4,36 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	// Note: cmd/api is in main package, so we test the server logic directly
 	// by importing the necessary packages
+	redisc "github.com/redis/go-redis/v9"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/db"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/redis"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/testutil"
-	schedulerv1 "github.com/williamntlam/go-grpc-task-scheduler/proto/scheduler/v1"
-	redisc "github.com/redis/go-redis/v9"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var testServerPool *pgxpool.Pool
 var testServerRedis *redisc.Client
 
-// testServer is a helper to create a server instance for testing
-// Since cmd/api is in main package, we'll test the server methods directly
-// by creating a server struct manually
-type testServer struct {
-	db    *pgxpool.Pool
-	redis *redisc.Client
-}
-
-func setupServerTest(t *testing.T) (*testServer, func()) {
+func setupServerTest(t *testing.T) func() {
 	ctx := context.Background()
 	cfg := testutil.GetTestConfig()
 
@@ -48,27 +36,6 @@ func setupServerTest(t *testing.T) (*testServer, func()) {
 		require.NoError(t, err)
 	}
 
-	// Create server instance (we'll need to access the actual server methods)
-	// For now, we'll test through the database and Redis directly
-	// Full server testing would require exposing server methods or using gRPC test client
-	server := &testServer{
-		db:    testServerPool,
-		redis: testServerRedis,
-	}
-
-	cleanup := func() {
-		teardownServerTest(t)
-	}
-
-	return server, cleanup
-}
-
-// Note: Full server method testing requires either:
-// 1. Moving server to internal package
-// 2. Using gRPC test infrastructure
-// 3. Exposing test helpers
-// For now, we test the underlying logic (db, redis) and integration flows
-
 	// Cleanup before test
 	if err := testutil.CleanupTestDB(ctx, testServerPool); err != nil {
 		t.Fatalf("Failed to cleanup test database: %v", err)
@@ -76,7 +43,19 @@ func setupServerTest(t *testing.T) (*testServer, func()) {
 	if err := testutil.CleanupTestRedis(ctx, testServerRedis); err != nil {
 		t.Fatalf("Failed to cleanup test redis: %v", err)
 	}
+
+	cleanup := func() {
+		teardownServerTest(t)
+	}
+
+	return cleanup
 }
+
+// Note: Full server method testing requires either:
+// 1. Moving server to internal package
+// 2. Using gRPC test infrastructure
+// 3. Exposing test helpers
+// For now, we test the underlying logic (db, redis) and integration flows
 
 func teardownServerTest(t *testing.T) {
 	ctx := context.Background()
@@ -90,32 +69,33 @@ func teardownServerTest(t *testing.T) {
 
 func TestSubmitJob(t *testing.T) {
 	ctx := context.Background()
-	setupServerTest(t)
-	defer teardownServerTest(t)
+	cleanup := setupServerTest(t)
+	defer cleanup()
 
 	t.Run("submits job successfully", func(t *testing.T) {
-		req := &schedulerv1.SubmitJobRequest{
-			Job: &schedulerv1.Job{
-				Type:     "noop",
-				Priority: schedulerv1.Priority_PRIORITY_HIGH,
-			},
+		// Test job creation directly through database
+		jobID := uuid.New()
+		job := db.Job{
+			TaskID:      jobID,
+			Type:        "noop",
+			Priority:    "high",
+			PayloadJSON: json.RawMessage(`{}`),
+			Status:      "queued",
+			Attempts:    0,
+			MaxAttempts: 3,
 		}
 
-		resp, err := testServer.SubmitJob(ctx, req)
+		createdID, _, err := db.CreateJob(ctx, testServerPool, job)
 		require.NoError(t, err)
-		require.NotNil(t, resp)
-		assert.NotEmpty(t, resp.JobId)
+		assert.Equal(t, jobID, createdID)
 
 		// Verify job was created in database
-		jobID, err := uuid.Parse(resp.JobId)
+		retrieved, err := db.GetJobByID(ctx, testServerPool, jobID)
 		require.NoError(t, err)
-
-		job, err := db.GetJobByID(ctx, testServerPool, jobID)
-		require.NoError(t, err)
-		require.NotNil(t, job)
-		assert.Equal(t, "noop", job.Type)
-		assert.Equal(t, "high", job.Priority)
-		assert.Equal(t, "queued", job.Status)
+		require.NotNil(t, retrieved)
+		assert.Equal(t, "noop", retrieved.Type)
+		assert.Equal(t, "high", retrieved.Priority)
+		assert.Equal(t, "queued", retrieved.Status)
 	})
 
 	t.Run("handles idempotency correctly", func(t *testing.T) {
@@ -208,9 +188,9 @@ func TestSubmitJob(t *testing.T) {
 	})
 }
 
-func TestGetJobByID(t *testing.T) {
+func TestServerGetJobByID(t *testing.T) {
 	ctx := context.Background()
-	_, cleanup := setupServerTest(t)
+	cleanup := setupServerTest(t)
 	defer cleanup()
 
 	t.Run("retrieves existing job", func(t *testing.T) {
@@ -273,9 +253,9 @@ func TestGetJobByID(t *testing.T) {
 	})
 }
 
-func TestCancelJob(t *testing.T) {
+func TestServerCancelJob(t *testing.T) {
 	ctx := context.Background()
-	_, cleanup := setupServerTest(t)
+	cleanup := setupServerTest(t)
 	defer cleanup()
 
 	t.Run("cancels queued job", func(t *testing.T) {
@@ -364,7 +344,7 @@ func TestCancelJob(t *testing.T) {
 
 func TestListJobsQuery(t *testing.T) {
 	ctx := context.Background()
-	_, cleanup := setupServerTest(t)
+	cleanup := setupServerTest(t)
 	defer cleanup()
 
 	t.Run("queries multiple jobs", func(t *testing.T) {
@@ -428,7 +408,7 @@ func TestListJobsQuery(t *testing.T) {
 
 func TestWatchJobValidation(t *testing.T) {
 	ctx := context.Background()
-	_, cleanup := setupServerTest(t)
+	cleanup := setupServerTest(t)
 	defer cleanup()
 
 	t.Run("validates job exists for watching", func(t *testing.T) {
