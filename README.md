@@ -1,508 +1,557 @@
+# gRPC Task Scheduler
 
-# High‑Level Implementation Guide — Go gRPC Task Scheduler (Redis + Workers/Consumers)
+A distributed, production-ready task scheduling system built with Go, gRPC, CockroachDB, and Redis. This system provides reliable job scheduling, execution, and monitoring with support for priority queues, retries, dead-letter queues, and comprehensive observability.
 
-**Updated:** 2025-11-12  
-**Stack:** Go • gRPC • Redis • CockroachDB • Prometheus/Grafana • Docker
+## Table of Contents
 
-This is a concise, step‑by‑step plan to build a **producer/consumer** task scheduler with **gRPC ingestion**, **Redis priority queues**, and **Go workers**. It layers in critical **system‑design concepts**: idempotency, retries, visibility timeouts, DLQs, backpressure, rate limits, circuit breakers, fan‑out/fan‑in, observability, and rollouts.
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Features](#features)
+- [Technology Stack](#technology-stack)
+- [Getting Started](#getting-started)
+- [API Documentation](#api-documentation)
+- [Configuration](#configuration)
+- [Development](#development)
+- [Testing](#testing)
+- [Monitoring & Observability](#monitoring--observability)
+- [Deployment](#deployment)
+- [Project Structure](#project-structure)
 
----
+## Overview
 
-## 0) Outcome (What you’ll have)
-- A **gRPC API** to submit jobs and stream status.
-- **Redis** queues (critical/high/default/low) + **leases ZSET** for visibility timeouts.
-- **Go workers/consumers** that process tasks with bounded concurrency.
-- **Retry pump** + **Dead Letter Queues**.
-- **CockroachDB** as the source of truth for task state (distributed SQL with ACID transactions).
-- **Prometheus** metrics + **Grafana** dashboard.
-- Clean separation so you can scale **producers** and **consumers** independently.
+The gRPC Task Scheduler is a distributed job scheduling system that allows you to:
 
----
+- **Submit jobs** via a gRPC API with different priorities (CRITICAL, HIGH, DEFAULT, LOW)
+- **Process jobs** asynchronously using worker pools
+- **Monitor job status** in real-time with streaming updates
+- **Handle failures** gracefully with automatic retries and exponential backoff
+- **Track metrics** with Prometheus and visualize with Grafana
+- **Scale horizontally** by running multiple worker instances
 
-## 1) Define gRPC Contracts (Producer/Client → Gateway)
-Create a protobuf in `proto/scheduler/v1/scheduler.proto`:
+The system is designed for reliability, with features like:
+- Idempotent job submission
+- Job state persistence in CockroachDB
+- Priority-based queuing in Redis
+- Automatic retry with exponential backoff
+- Dead-letter queue for permanently failed jobs
+- Graceful shutdown handling
 
-- **Service**
-  - `SubmitJob(Job)` → `SubmitJobResponse { job_id }`
-  - `GetJob(GetJobRequest)` → `JobStatus`
-  - `WatchJob(WatchJobRequest)` → `stream JobEvent` (server streaming for progress)
-- **Messages**
-  - `Job { job_id (optional on submit), type, priority, payload_json, idempotency_key }`
-  - `JobStatus { state: QUEUED|RUNNING|SUCCEEDED|FAILED|DEADLETTER, attempts, last_error }`
+## Architecture
 
-> Generate Go stubs; enable interceptors for tracing/metrics. Prefer **deadline** and **retry** settings in the client (gRPC channel config).
-
----
-
-## 2) Stand Up Core Infra (Docker Compose)
-- **Redis 7** (default config is fine for dev)
-- **CockroachDB** (holds tasks/attempts/idempotency; use `cockroachdb/cockroach:latest` image)
-- **Prometheus** (scrapes :2112 and :2113)
-- **Grafana** (pre‑provision one dashboard JSON)
-
-> Keep secrets in env files; use separate networks. Add a Makefile with `make dev`, `make api`, `make worker`, `make migrate`.
-> 
-> **CockroachDB Setup**: Initialize cluster with `cockroach init` or `--init` flag. Use connection string format: `postgresql://root@cockroachdb:26257/defaultdb?sslmode=disable` (dev) or with SSL for production. Enable `serializable` isolation level for strong consistency.
-
----
-
-## 3) CockroachDB Schema (Authoritative State)
-Tables:
-- `tasks(task_id UUID PRIMARY KEY DEFAULT gen_random_uuid(), type STRING, priority STRING, payload JSONB, status STRING, attempts INT DEFAULT 0, max_attempts INT DEFAULT 3, next_run_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now())`
-- `task_attempts(task_id UUID REFERENCES tasks(task_id), started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ, ok BOOLEAN, error STRING, PRIMARY KEY (task_id, started_at))`
-- `idempotency_keys(idempotency_key STRING PRIMARY KEY, task_id UUID REFERENCES tasks(task_id), created_at TIMESTAMPTZ DEFAULT now())`
-
-Indexes:
-- `CREATE INDEX idx_tasks_status ON tasks(status) WHERE status IN ('queued', 'running')`
-- `CREATE INDEX idx_tasks_next_run_at ON tasks(next_run_at) WHERE status = 'retry'`
-- `CREATE INDEX idx_tasks_priority_status ON tasks(priority, status)`
-
-> **CockroachDB Notes**: 
-> - Use `UUID` for primary keys (better for distributed performance than auto-increment).
-> - Use `TIMESTAMPTZ` for all timestamps (timezone-aware).
-> - Leverage `JSONB` for flexible payload storage with indexing support.
-> - Use `SERIALIZABLE` isolation level for strong consistency guarantees.
-> - **Idempotency**: on `SubmitJob`, use `INSERT ... ON CONFLICT (idempotency_key) DO UPDATE SET task_id = excluded.task_id RETURNING task_id`; return existing `task_id` if conflict.
-> - Consider partitioning by `created_at` or `status` for large-scale deployments.
-
-### 3.1 CockroachDB Implementation Best Practices
-
-**Connection Pooling**:
-- Use `pgxpool` (or `database/sql` with `pgx` driver) with connection pooling.
-- Configure pool size: `MaxConns=25`, `MinConns=5` per worker/API instance.
-- Set `MaxConnLifetime=30m` and `MaxConnIdleTime=5m` to prevent stale connections.
-- Use `application_name` in connection string for observability: `?application_name=task-scheduler-api`.
-
-**Transaction Handling**:
-- Always use explicit transactions (`BEGIN`/`COMMIT`) for multi-statement operations.
-- Set transaction isolation: `SET TRANSACTION ISOLATION LEVEL SERIALIZABLE` (or use `pgx`'s `TxOptions`).
-- Keep transactions short (< 100ms) to reduce contention and retry overhead.
-- Handle `40001` (serialization failure) errors with exponential backoff retries (CockroachDB's automatic retry in `pgx` v5+).
-
-**Performance Optimizations**:
-- Use prepared statements for frequently executed queries (reduces parsing overhead).
-- Batch operations where possible: `INSERT INTO tasks VALUES (unnest($1::uuid[]), ...)`.
-- Use `SELECT ... FOR UPDATE SKIP LOCKED` for concurrent polling without blocking.
-- Leverage partial indexes: `CREATE INDEX idx_active_tasks ON tasks(status) WHERE status IN ('queued', 'running')`.
-- Monitor transaction retries: expose `cockroachdb_transaction_retries_total` metric.
-
-**Migrations**:
-- Use `golang-migrate` or `goose` with CockroachDB-compatible syntax.
-- Test migrations on a staging cluster before production.
-- Use `IF NOT EXISTS` for idempotent migrations.
-- Consider using CockroachDB's `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` for zero-downtime schema changes.
-
----
-
-## 4) Redis Keys & Fair Priority Pop
-- Queues: `q:critical`, `q:high`, `q:default`, `q:low` (LISTs)
-- Leases: `leases` (ZSET; score = lease_deadline_ms; member = task_id)
-- Retries: `retry:z:{priority}` (ZSET; score = ready_at_ms)
-- Dead letters: `dlq:{priority}` (LIST of JSON payloads)
-
-**Lua script** `pop_next.lua` (atomic fair pop):
-1) RPOP from `q:critical` → `q:high` → `q:default` → `q:low`.
-2) If found, decode `{ task_id,... }`, compute `deadline = now + lease_ms`.
-3) `ZADD leases deadline task_id` (visibility timeout lease).
-4) Return the popped payload as JSON.
-
-> Ensures single‑consumer leasing and **at‑least‑once** semantics.
-
----
-
-## 5) gRPC Gateway (Producer) Flow
-- Validate request; **coerce/guard** `type`, `priority`, `max_attempts`.
-- **Insert task** row (`status=queued`), create mapping for `idempotency_key` if provided.
-- Push **lean payload** to Redis: `{ task_id, type, priority }` via `LPUSH q:{priority}`.
-- Return `{ job_id }` immediately.
-- For `WatchJob`, stream updates by polling CockroachDB or subscribing to internal events. Consider using CockroachDB's `CHANGEFEED` for real-time updates (requires enterprise license) or polling with `SELECT ... FOR UPDATE SKIP LOCKED` for efficient concurrent polling.
-
-**Concepts used**: **idempotency**, **schema validation**, **timeouts**, **auth** (optional JWT/HMAC), **rate limiting** per API key (token bucket, Redis counters).
-
----
-
-## 6) Worker/Consumer Design (Go)
-- **Process model**: each `worker` binary runs **N goroutines** (bounded by `WORKER_POOL`) and uses the Lua pop script for atomic claim.
-- On pop:
-  1) Use CockroachDB transaction: `BEGIN; UPDATE tasks SET status='running', attempts=attempts+1, updated_at=now() WHERE task_id=$1 AND status='queued' RETURNING task_id; INSERT INTO task_attempts(task_id, started_at) VALUES($1, now()); COMMIT;` (ensures atomic state transition).
-  2) Run handler with **context timeout = visibility timeout**.
-  3) On **success**: `ZREM leases task_id`, then `UPDATE tasks SET status='succeeded', updated_at=now() WHERE task_id=$1; UPDATE task_attempts SET finished_at=now(), ok=true WHERE task_id=$1 AND finished_at IS NULL;`.
-  4) On **error**: compute backoff, move to retry ZSET or DLQ, then `UPDATE tasks SET status='failed'|'retry'|'deadletter', next_run_at=$2, updated_at=now() WHERE task_id=$1; UPDATE task_attempts SET finished_at=now(), ok=false, error=$3 WHERE task_id=$1 AND finished_at IS NULL;`.
-
-**Concepts used**: **bounded concurrency**, **backpressure** (do not exceed pool size), **visibility timeout**, **retry with exponential backoff + jitter**, **DLQ isolation**.
-
----
-
-## 7) Retry Pump & Reaper
-- **Retry Pump** (ticker every 500ms):
-  - For each `retry:z:{priority}`, `ZRANGEBYSCORE` up to now → `LPUSH q:{priority}`, then `ZREMRANGEBYSCORE` to remove.
-- **Reaper** (ticker every 2s):
-  - `ZRangeByScore leases` for expired deadlines → requeue to original priority (lookup in DB) → `ZREM leases`.
-  - Increments **reaped** metric; **do not** reset `attempts`.
-
-**Concepts used**: **at‑least‑once delivery**, **time‑based coordination**, **eventual consistency**.
-
----
-
-## 8) Core Handlers (to test the system)
-Implement idempotent handlers in `internal/worker/handlers.go`:
-- `noop` → immediate success.
-- `flaky(n)` → fail the first *n* attempts, then succeed.
-- `always_fail` → always error → DLQ after `max_attempts`.
-- `sleep(ms)` → sleep > visibility to force a **reap**.
-- `http_call(url)` → external I/O with **circuit breaker** + **timeouts**.
-- `db_tx(unique_key)` → `INSERT ... ON CONFLICT DO NOTHING` to prove **idempotent effects**. Use CockroachDB transactions with `SERIALIZABLE` isolation to ensure exactly-once semantics for side effects.
-
-**Concepts used**: **idempotent side‑effects**, **circuit breakers**, **timeouts**, **retries**.
-
----
-
-## 9) Observability (Metrics, Traces, Logs)
-- **Prometheus** (API :2112, Worker :2113):
-  - Counters: `tasks_enqueued_total`, `dequeued_total`, `succeeded_total`, `failed_total`, `retried_total`, `reaped_total`.
-  - Gauges: `queue_depth{{priority}}`, `retry_depth{{priority}}`, `dlq_depth{{priority}}`, `inflight_leases`.
-  - Histograms: `task_run_seconds{{type}}`, `enqueue_to_start_seconds{{priority}}`.
-- **Grafana**: p95 run time, queue depth, DLQ size, throughput, inflight.
-- **Tracing** (optional): OTel spans for gRPC request → worker execution; **propagate trace_id** in Redis message headers.
-- **Structured logs** (zap/zerolog): include `task_id`, `trace_id`, `queue`, `handler` fields.
-
-**Concepts used**: **SLOs**, **RED/USE metrics**, **p‑quantiles**, **golden signals**.
-
----
-
-## 10) Fan‑Out / Fan‑In (Optional Upgrade)
-- **Fan‑out**: one job creates *k* sub‑tasks (e.g., `video:1080p`, `video:720p`, `thumbs`), each enqueued to Redis.
-- **Fan‑in aggregator**: track completion via CockroachDB rows or Redis keys (`job:{id}:done_count`). Use CockroachDB's `SELECT COUNT(*) FROM tasks WHERE parent_id=$1 AND status='succeeded'` with `SERIALIZABLE` isolation to ensure accurate counts. When all sub‑tasks succeed → mark parent `SUCCEEDED` in a transaction. Timeouts push parent to `REVIEW` or `FAILED`.
-
-**Concepts used**: **workflow orchestration**, **barriers**, **join/aggregation**.
-
----
-
-## 11) Reliability & Safety
-- **At‑least‑once** semantics by design; guard side‑effects with idempotency.
-- **Backpressure**: keep a bounded worker pool; use **prefetch** limits (don’t pop if pool full).
-- **Rate limits** on producer gRPC to prevent queue explosions.
-- **DLQs** per priority with a **replay tool** (move back to a queue after you fix the bug/data).
-- **Schema guardrails**: reject oversized payloads; validate types and enums.
-
----
-
-## 12) Testing & Load
-- Provide a `cmd/load` program to submit mixed jobs:
-  - 80% `noop`, 10% `flaky(2)`, 5% `always_fail`, 5% `sleep(>vis)`.
-- Watch: queue depth, success/failed ratios, retries, p95 runtimes.
-- Kill/restart workers to validate **reaper** recovery.
-
-**Concepts used**: **failure injection**, **chaos testing lite**, **warm/cold restarts**.
-
----
-
-## 13) Deployment & Rollouts
-- Containerize API + Worker.
-- Use **readiness/liveness** probes.
-- Configuration via env (12‑factor).
-- Rolling restarts to prove **no task loss beyond at‑least‑once**.
-- For Kubernetes: HPA on `queue_depth` or `run_seconds p95`.
-
-**Concepts used**: **blue/green or rolling** deploys, **graceful shutdown** (drain leases), **config as code**.
-
----
-
-## 14) Security & Multi‑Tenancy (Later)
-- gRPC **mTLS** or JWT for authn; **RBAC** for management endpoints.
-- **Tenant key prefixes** (`tenant:{id}:q:*`) with per‑tenant quotas.
-- **Audit logs** to CockroachDB for admin actions (replay DLQ, force retry). Use CockroachDB's time-travel queries (`AS OF SYSTEM TIME`) for point-in-time audit analysis.
-
----
-
-## 15) Stretch Concepts (When Ready)
-- **Outbox / Inbox** patterns for exactly‑once effects to other systems.
-- **Sagas** for multi‑step workflows w/ compensation.
-- **Priority aging** to avoid starvation.
-- **Adaptive concurrency** (auto‑tune pool from CPU/latency).
-
----
-
-## 16) Minimal Repo Skeleton
 ```
-/cmd
-  /api         # gRPC server + Redis producer + metrics
-  /worker      # consumer loop + handlers + retry pump + reaper + metrics
-  /load        # load generator
-/internal
-  /config      # env → Config
-  /db          # CockroachDB helpers (connection pooling, transactions, migrations)
-  /queue       # Redis client + Lua scripts
-  /worker      # handlers, backoff, circuit breaker
-  /metrics     # Prometheus registration
-/proto/scheduler/v1
-/migrations
-/deploy        # docker-compose.yml, prometheus.yml, grafana/
-/Makefile
+┌─────────────┐         ┌──────────────┐         ┌─────────────┐
+│   Client    │─────────▶│  API Server │────────▶│ CockroachDB │
+│  (gRPC)     │         │  (gRPC)      │         │  (State)    │
+└─────────────┘         └──────────────┘         └─────────────┘
+                               │                         │
+                               │                         │
+                               ▼                         │
+                        ┌─────────────┐                 │
+                        │    Redis    │◀────────────────┘
+                        │  (Queues)   │
+                        └─────────────┘
+                               │
+                               │
+                               ▼
+                        ┌─────────────┐
+                        │   Worker    │
+                        │  (Process)  │
+                        └─────────────┘
+                               │
+                               ▼
+                        ┌─────────────┐
+                        │ Prometheus  │
+                        │  (Metrics)  │
+                        └─────────────┘
 ```
 
----
+### Components
 
-## 17) Quick Bring‑Up Checklist
-1. `make dev` → Redis, CockroachDB, Prometheus, Grafana up.
-2. `make migrate` → apply SQL migrations (use `cockroach sql` or `pgx` migrations with CockroachDB-compatible syntax).
-3. Start gateway: `make api` (gRPC on :8081, metrics :2112).
-4. Start worker: `make worker` (metrics :2113).
-5. Submit jobs with `grpcurl` or a client stub.
-6. Watch Grafana: queue depth falls; p95 stabilizes.
-7. Kill worker → confirm **reaper** requeues leases → restart → jobs complete.
+1. **API Server** (`cmd/api`): gRPC server that handles job submission, status queries, cancellation, and listing
+2. **Worker** (`cmd/worker`): Background process that consumes jobs from Redis queues and executes them
+3. **CockroachDB**: Persistent storage for job state, attempts, and metadata
+4. **Redis**: Priority-based job queues and processing queue management
+5. **Prometheus**: Metrics collection and storage
+6. **Grafana**: Metrics visualization and dashboards
 
+### Job Lifecycle
 
-# Add-On: DAG Workflows, Autoscaling, and Advanced Reliability
-**Scope:** Extends the gRPC + Redis scheduler with **DAG orchestration**, **autoscaling**, and **production-grade reliability** patterns.
+1. **Submission**: Client submits job via gRPC → API validates and stores in DB → Job pushed to Redis priority queue
+2. **Processing**: Worker claims job from Redis → Moves to processing queue → Executes handler → Updates state
+3. **Completion**: On success → Mark as succeeded; On failure → Retry or move to DLQ
+4. **Retry**: Retry pump periodically checks for jobs ready to retry → Requeues them
+5. **Recovery**: Reaper process recovers stuck jobs that have been in processing too long
 
----
+## Features
 
-## 1) DAG Workflows (Fan‑Out / Fan‑In / Dependencies)
+### Core Features
 
-### 1.1 Concepts
-- **DAG**: Jobs modeled as nodes with directed edges (dependencies). No cycles.
-- **Node**: A task template (`type`, `priority`, `payload`, `max_attempts`, `timeout_ms`).
-- **Run**: A concrete execution of a DAG (root job) with per-node runtime state.
-- **States**: `PENDING → READY → RUNNING → SUCCEEDED / FAILED / CANCELED / SKIPPED`.
-- **Policies**: `all_success` (default) or `any_success` for fan‑in gates; `on_fail = stop|continue|compensate`.
+- ✅ **Priority-based Queuing**: Four priority levels (CRITICAL, HIGH, DEFAULT, LOW)
+- ✅ **Job Types**: Support for multiple job handlers (noop, http_call, db_tx)
+- ✅ **Idempotency**: Duplicate job submissions return existing job
+- ✅ **Retry Logic**: Automatic retries with exponential backoff
+- ✅ **Dead Letter Queue**: Failed jobs after max attempts moved to DLQ
+- ✅ **Job Cancellation**: Cancel queued or running jobs
+- ✅ **Real-time Monitoring**: Stream job status updates via gRPC
+- ✅ **Job Listing**: Query jobs with filters (state, priority, type) and pagination
 
-### 1.2 Minimal Schema
+### Observability
+
+- ✅ **Prometheus Metrics**: Comprehensive metrics for jobs, queues, and performance
+- ✅ **Health Checks**: `/health` (liveness) and `/ready` (readiness) endpoints
+- ✅ **Structured Logging**: Detailed logs for debugging and auditing
+- ✅ **Grafana Dashboards**: Pre-configured dashboards for visualization
+
+### Reliability
+
+- ✅ **Graceful Shutdown**: In-flight jobs complete before shutdown
+- ✅ **Connection Pooling**: Efficient database and Redis connection management
+- ✅ **Error Handling**: Comprehensive error handling with proper gRPC status codes
+- ✅ **Stuck Job Recovery**: Automatic recovery of jobs stuck in processing
+
+## Technology Stack
+
+- **Language**: Go 1.24+
+- **gRPC**: Protocol Buffers for API definition
+- **Database**: CockroachDB (PostgreSQL-compatible)
+- **Queue**: Redis 7
+- **Metrics**: Prometheus
+- **Visualization**: Grafana
+- **Testing**: testify, testutil
+
+## Getting Started
+
+### Prerequisites
+
+- Go 1.24 or later
+- Docker and Docker Compose
+- Make (optional, for convenience commands)
+
+### Quick Start
+
+1. **Clone the repository**:
+   ```bash
+   git clone <repository-url>
+   cd go-gRPC-task-scheduler
+   ```
+
+2. **Start infrastructure services**:
+   ```bash
+   make dev
+   # Or manually:
+   cd deploy && docker compose up -d
+   ```
+
+3. **Initialize database schema**:
+   ```bash
+   make setup
+   # Or manually:
+   ./scripts/setup.sh
+   ```
+
+4. **Start the API server** (in one terminal):
+   ```bash
+   make api
+   # Or manually:
+   go run ./cmd/api
+   ```
+
+5. **Start the worker** (in another terminal):
+   ```bash
+   make worker
+   # Or manually:
+   go run ./cmd/worker
+   ```
+
+6. **Verify services are running**:
+   - API Server: `grpcurl -plaintext localhost:8081 list`
+   - Metrics: `curl http://localhost:2112/metrics`
+   - Health: `curl http://localhost:2112/health`
+   - CockroachDB UI: http://localhost:8080
+   - Grafana: http://localhost:3000 (admin/admin)
+   - Prometheus: http://localhost:9090
+
+### Example: Submit a Job
+
+Using `grpcurl`:
+
+```bash
+grpcurl -plaintext -d '{
+  "job": {
+    "type": "noop",
+    "priority": "PRIORITY_HIGH",
+    "max_attempts": 3
+  }
+}' localhost:8081 scheduler.v1.SchedulerService/SubmitJob
 ```
-dag_definitions(dag_id, name, version, created_at)
-dag_nodes(node_id, dag_id, name, type, priority, payload, max_attempts, timeout_ms, on_fail)
-dag_edges(dag_id, from_node_id, to_node_id)
 
-dag_runs(run_id, dag_id, status, created_at, updated_at)
-dag_node_runs(node_run_id, run_id, node_id, status, attempts, started_at, finished_at, last_error)
-```
-
-### 1.3 Readiness Rule
-A node becomes **READY** when all of its upstream dependencies are `SUCCEEDED` (or policy allows otherwise).
-
-### 1.4 Dispatcher (Orchestrator) Flow
-1. **Topological scan** of `dag_node_runs` for a given `run_id`.
-2. For each `PENDING` node whose deps are satisfied → mark `READY`.
-3. Enqueue `{ run_id, node_id, type, priority }` to `q:{priority}` (Redis).
-4. When a worker finishes a node:
-   - Update `dag_node_runs.status` to `SUCCEEDED` (or `FAILED`).
-   - Orchestrator re-scans downstream nodes. If all terminal nodes succeed → `dag_runs.status = SUCCEEDED`.
-
-> The orchestrator can be a separate service that wakes periodically or reacts to a message bus event (`node.done`).
-
-### 1.5 Idempotency & Exactly‑Once Effects per Node
-- Every node handler must be **idempotent**: protect side effects with unique keys (`INSERT ... ON CONFLICT DO NOTHING`), external APIs with natural keys, or a **dedupe table**.
-- Store a **handler_result_hash** to short‑circuit repeats where safe.
-
-### 1.6 Compensation / Sagas (Optional)
-Add `compensation_type` for nodes that need rollback. On upstream failure with `on_fail=compensate`:
-- Enqueue compensating nodes in reverse topological order.
-- Track separate `compensation_runs` tables or a `mode=COMPENSATING` flag on `dag_runs`.
-
-### 1.7 Concurrency Controls
-- **Per‑DAG concurrency**: limit concurrent nodes per run (`max_parallelism`).
-- **Per‑Node concurrency**: limit concurrent executions of a node template across the fleet (use Redis semaphore `ZSET` or token bucket).
-
-### 1.8 gRPC API (Orchestrator)
-- `StartDAG(StartDAGRequest)` → `StartDAGResponse { run_id }`
-- `GetDAGRun(GetDAGRunRequest)` → `DAGRunStatus { overall_state, node_states[] }`
-- `WatchDAGRun(WatchDAGRunRequest)` → `stream DAGEvent { node_id, status, percent }`
-
----
-
-## 2) Autoscaling (HPA/KEDA + Backpressure)
-
-### 2.1 Signals
-- **Queue depth** (per priority): `LLEN q:critical|high|default|low`
-- **Leases inflight**: `ZCARD leases`
-- **Latency SLO**: p95 `task_run_seconds`
-- **Retry pressure**: size of `retry:z:*`
-
-### 2.2 Horizontal Pod Autoscaler (HPA)
-- Export queue depth to Prometheus: `scheduler_queue_depth{priority}`.
-- HPA with `external.metrics.k8s.io` via Prometheus Adapter:
-  - Scale `worker` deployment by `queue_depth` (per priority) and `p95 run time`.
-  - Example: target `queue_depth/default > 1000` → replicas += 1 every 30s (cooldown).
-
-### 2.3 KEDA (Simpler)
-- Use **Redis scaler** on `q:default` length and `q:critical` length.
-- Define `minReplicaCount`, `maxReplicaCount`, `pollingInterval`, `cooldownPeriod`.
-- Advantage: no custom adapters; uses Redis directly.
-
-### 2.4 Adaptive Concurrency (Inside Worker)
-- Dynamically adjust `WORKER_POOL` based on:
-  - CPU > 85%: decrement pool; CPU < 40%: increment pool (bounded).
-  - Or based on target p95 runtime and failure rate.
-
-### 2.5 Backpressure & Load Shedding
-- **Producer** rate limits: token bucket per API key/tenant.
-- **Drop or degrade** low‑priority jobs under overload (aging, demotion thresholds).
-- **Admission control**: reject new tasks if `queue_depth` + `retry_depth` exceed ceilings; return `429`/`RESOURCE_EXHAUSTED` gRPC status with retry‑after.
-
----
-
-## 3) Advanced Reliability (Beyond At‑Least‑Once)
-
-### 3.1 Transactional Outbox / Inbox
-- When a handler emits events or writes to other systems, write to a local **outbox** table **in the same DB transaction** as state changes.
-- A background relay reads outbox rows and publishes to Kafka/Redis with dedupe keys, marking rows as delivered.
-- **Inbox** table on the consumer side deduplicates incoming events by `message_id`, ensuring idempotent processing.
-
-### 3.2 Exactly‑Once Effect Semantics (Practical)
-- Combine **at‑least‑once transport** with **idempotent handlers** + **dedupe tables**.
-- Use `idempotency_keys(idempotency_key UNIQUE)` around the smallest side effect boundary.
-
-### 3.3 Circuit Breakers & Bulkheads
-- **Per‑handler** breaker (e.g., `http_call`): open on 50% failures / 20 requests window; half‑open probes after backoff.
-- **Bulkhead pools**: isolate slow I/O handlers from CPU‑bound ones (separate goroutine pools, separate deployments).
-
-### 3.4 Timeouts & Deadlines
-- gRPC server/client deadlines; per‑handler timeouts; lease >= handler timeout + small buffer.
-- Cancel contexts on shutdown; drain leases gracefully.
-
-### 3.5 Multi‑Region / DR (Later)
-- **Active/Active** with regional Redis and per‑region queues; keep **DAG orchestration regional**.
-- **CockroachDB Multi-Region**: Use CockroachDB's native multi-region features:
-  - Define regions: `ALTER DATABASE scheduler SET PRIMARY REGION "us-east-1"; ALTER DATABASE scheduler ADD REGION "us-west-1";`
-  - Use `REGIONAL BY ROW` tables for low-latency writes: `ALTER TABLE tasks SET LOCALITY REGIONAL BY ROW;`
-  - Use `GLOBAL` tables for reference data: `ALTER TABLE dag_definitions SET LOCALITY GLOBAL;`
-  - Leverage follower reads for cross-region queries: `SELECT ... FROM tasks AS OF SYSTEM TIME follower_read_timestamp();`
-- **Failover**: CockroachDB handles automatic failover; re‑seed `retry:z:*` and `leases` carefully after region failover.
-- **Shard by tenant** to cap blast radius; use CockroachDB's `REGIONAL BY ROW AS tenant_id` for tenant-based sharding.
-
-### 3.6 Chaos & Game Days
-- Fault injection flags in handlers: random 500s, timeouts, sleeps.
-- Periodic drills: kill workers, pause Redis, degrade DB; verify SLO / recovery.
-
----
-
-## 4) DAG Orchestrator — Pseudocode
+Using a Go client:
 
 ```go
-func tickOrchestrator(runID int64) {
-  // 1) load all node runs
-  nodes := loadNodeRuns(runID)
+conn, _ := grpc.Dial("localhost:8081", grpc.WithInsecure())
+client := schedulerv1.NewSchedulerServiceClient(conn)
 
-  // 2) find READY set
-  for _, n := range nodes {
-    if n.Status != PENDING { continue }
-    if depsSatisfied(n, nodes) && underParallelism(runID) {
-      markReady(n)
-      enqueue(n) // LPUSH q:{priority} with {run_id,node_id,type}
-    }
-  }
+resp, _ := client.SubmitJob(ctx, &schedulerv1.SubmitJobRequest{
+    Job: &schedulerv1.Job{
+        Type:     "noop",
+        Priority: schedulerv1.Priority_PRIORITY_HIGH,
+    },
+})
+```
 
-  // 3) terminal evaluation
-  if allTerminalsSucceeded(nodes) { markRunSucceeded(runID); return }
-  if anyTerminalFailed(nodes)     { markRunFailed(runID); return }
+## API Documentation
+
+### gRPC Service: `SchedulerService`
+
+#### SubmitJob
+
+Submit a new job for processing.
+
+**Request**:
+```protobuf
+message SubmitJobRequest {
+    Job job = 1;
+}
+
+message Job {
+    string job_id = 1;              // Optional: UUID for idempotency
+    string type = 2;                // Required: "noop", "http_call", "db_tx"
+    Priority priority = 3;           // Required: CRITICAL, HIGH, DEFAULT, LOW
+    string payload_json = 4;        // Optional: JSON payload
+    int32 max_attempts = 6;         // Optional: default 3
 }
 ```
 
-**depsSatisfied** checks all upstream nodes `SUCCEEDED` (or policy).
-
----
-
-## 5) Redis Keys for DAG State (Optional Cache)
-```
-dag:{run_id}:ready                # SET of node_ids
-dag:{run_id}:done                 # SET of node_ids
-dag:{run_id}:deps:{node_id}       # SET of upstream node_ids
-dag:{run_id}:pending_count        # COUNTER
-```
-> Source of truth remains CockroachDB; Redis is just a speed cache. Use CockroachDB's `SERIALIZABLE` isolation for DAG state consistency.
-
----
-
-## 6) gRPC Additions (DAG Control Plane)
-```
-service Orchestrator {
-  rpc StartDAG(StartDAGRequest) returns (StartDAGResponse);
-  rpc GetDAGRun(GetDAGRunRequest) returns (DAGRunStatus);
-  rpc WatchDAGRun(WatchDAGRunRequest) returns (stream DAGEvent);
-  rpc CancelDAG(CancelDAGRequest) returns (CancelDAGResponse);
+**Response**:
+```protobuf
+message SubmitJobResponse {
+    string job_id = 1;  // UUID of the created job
 }
 ```
-- **Cancel** sets remaining `PENDING/READY/RUNNING` to `CANCELED` (+ stop scheduling).
 
----
+#### GetJob
 
-## 7) Prometheus SLOs & Alerts (Examples)
+Get the current status of a job.
 
-### 7.1 SLO Targets
-- Availability (API): 99.9%
-- p95 handler runtime: < 500ms (default), < 2s (I/O)
-- Error budget: 0.1% failed tasks per day
-
-### 7.2 Alerts
-- **Queue Saturation**: `scheduler_queue_depth > 10k for 5m`
-- **High Failure Ratio**: `rate(failed_total[10m]) / (rate(failed_total[10m]) + rate(succeeded_total[10m])) > 0.2`
-- **Retry Storm**: `increase(retried_total[5m]) > 5000`
-- **Slow p95**: `histogram_quantile(0.95, sum(rate(task_run_seconds_bucket[5m])) by (le,type)) > 2`
-
----
-
-## 8) Deployment Patterns
-
-### 8.1 Separate Deployments
-- `gateway` (gRPC API)
-- `orchestrator` (DAG scheduler)
-- `worker-cpu`
-- `worker-io`
-- `worker-dag-agg` (optional)
-
-### 8.2 Rollouts
-- Blue/Green or Canary (limit DAG types in canary).
-- Quorum‑based migration: orchestrator vN only schedules DAGs vN; existing runs continue under vN‑1.
-
-### 8.3 Config
-- All knobs via env (12‑factor): pool sizes, TTLs, backoff caps, queue names, SLOs.
-
----
-
-## 9) Quick Implementation Checklist
-
-- [ ] Add DAG tables & migrations
-- [ ] Build orchestrator: readiness scan + enqueue + terminal evaluation
-- [ ] Extend worker payload to include `{run_id,node_id}`
-- [ ] Add per‑node policies: `max_attempts`, `timeout_ms`, `on_fail`
-- [ ] Build compensation hooks (optional)
-- [ ] Ship Redis semaphore or per‑node concurrency limits
-- [ ] Provision Prometheus rules for DAG metrics
-- [ ] Add KEDA/HPA autoscaling manifests
-- [ ] Add rate‑limit middleware for gRPC
-- [ ] Implement outbox/inbox tables for cross‑system events
-- [ ] Run chaos tests and validate SLOs
-
----
-
-## 10) Minimal Code Touchpoints
-
-- `internal/orchestrator/scan.go`: depsSatisfied, underParallelism, enqueue
-- `internal/orchestrator/terminal.go`: allTerminalsSucceeded/Failed
-- `cmd/orchestrator/main.go`: ticker loop + gRPC server for DAG APIs
-- `internal/worker/handlers.go`: make node handlers idempotent + compensations
-- `internal/metrics/dag.go`: per‑node stage counters, run gauges
-- `deploy/keda/*.yaml`: Redis scalers (queue depth)
-- `deploy/hpa/*.yaml`: HPA based on Prometheus Adapter metrics
-
----
-
-## 11) Example: Fan‑Out Transcode DAG
+**Request**:
+```protobuf
+message GetJobRequest {
+    string job_id = 1;  // UUID of the job
+}
 ```
-ingest → probe ─┬→ transcode-1080p ─┬→ package
-                ├→ transcode-720p  ─┤
-                └→ thumbnails      ─┘
+
+**Response**:
+```protobuf
+message JobStatus {
+    string job_id = 1;
+    JobState state = 2;  // QUEUED, RUNNING, SUCCEEDED, FAILED, DEADLETTER
+    int32 attempts = 3;
+    string last_error = 4;
+    google.protobuf.Timestamp created_at = 5;
+    google.protobuf.Timestamp updated_at = 6;
+    // ...
+}
 ```
-- Orchestrator enqueues 3 child nodes after `probe` success.
-- `package` waits for all 3 `SUCCEEDED` (fan‑in).
 
----
+#### WatchJob
 
-## 12) Final Notes
-- Keep **handlers simple and idempotent**; push orchestration complexity into the orchestrator.
-- Autoscale from **queue depth** and **latency**, not CPU alone.
-- Prefer **at‑least‑once** + idempotency over naive exactly‑once claims.
-- Test with **failures** on purpose; practice recovery runbooks.
+Stream real-time job status updates (server streaming).
 
-This add‑on gives you a credible, resume‑ready architecture that mirrors real production systems.
+**Request**:
+```protobuf
+message WatchJobRequest {
+    string job_id = 1;
+}
+```
 
+**Response**: Stream of `JobEvent` messages
+
+#### CancelJob
+
+Cancel a queued or running job.
+
+**Request**:
+```protobuf
+message CancelJobRequest {
+    string job_id = 1;
+}
+```
+
+**Response**:
+```protobuf
+message CancelJobResponse {
+    bool cancelled = 1;
+}
+```
+
+#### ListJobs
+
+List jobs with optional filters and pagination.
+
+**Request**:
+```protobuf
+message ListJobsRequest {
+    JobState state_filter = 1;
+    Priority priority_filter = 2;
+    string type_filter = 3;
+    int32 page_size = 4;
+    string page_token = 5;
+}
+```
+
+**Response**:
+```protobuf
+message ListJobsResponse {
+    repeated JobStatus jobs = 1;
+    string next_page_token = 2;
+}
+```
+
+## Configuration
+
+### Environment Variables
+
+Create a `.env` file or set environment variables:
+
+```bash
+# API Server
+GRPC_PORT=8081
+METRICS_PORT=2112
+
+# Worker
+WORKER_POOL_SIZE=10
+METRICS_PORT=2113
+
+# Database
+COCKROACHDB_HOST=localhost
+COCKROACHDB_PORT=26257
+COCKROACHDB_USER=root
+COCKROACHDB_PASSWORD=
+COCKROACHDB_DATABASE=scheduler
+COCKROACHDB_SSLMODE=disable
+
+# Redis
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+```
+
+### Docker Compose Services
+
+The `deploy/docker-compose.yml` includes:
+
+- **CockroachDB**: Port 26257 (SQL), 8080 (Admin UI)
+- **Redis**: Port 6379
+- **Prometheus**: Port 9090
+- **Grafana**: Port 3000 (admin/admin)
+
+## Development
+
+### Project Structure
+
+```
+.
+├── cmd/
+│   ├── api/          # gRPC API server
+│   └── worker/       # Worker process
+├── internal/
+│   ├── db/           # Database operations
+│   ├── redis/        # Redis queue operations
+│   ├── worker/       # Worker logic
+│   ├── metrics/      # Prometheus metrics
+│   ├── testutil/     # Test utilities
+│   └── utils/        # Utility functions
+├── proto/            # Protocol Buffer definitions
+├── tests/            # Test suite
+├── deploy/           # Docker Compose and configs
+└── scripts/          # Setup and teardown scripts
+```
+
+### Make Commands
+
+```bash
+make dev          # Start infrastructure (Redis, DB, Prometheus, Grafana)
+make api          # Run API server
+make worker       # Run worker
+make setup        # Initialize database schema
+make teardown     # Stop all services
+make clean        # Stop and remove volumes
+make migrate      # Run database migrations
+make status       # Check service status
+make logs         # View service logs
+```
+
+### Building
+
+```bash
+# Build API server
+go build -o bin/api ./cmd/api
+
+# Build worker
+go build -o bin/worker ./cmd/worker
+```
+
+## Testing
+
+### Running Tests
+
+```bash
+# Run all tests
+go test ./tests/... -v
+
+# Run specific test suite
+go test ./tests/... -run TestGetJobByID -v
+
+# Run with coverage
+go test ./tests/... -coverprofile=coverage.out
+go tool cover -html=coverage.out
+```
+
+### Test Structure
+
+- **Unit Tests**: Test individual functions in isolation
+- **Integration Tests**: Test full workflows (API → DB → Redis → Worker)
+- **Test Utilities**: `internal/testutil` provides setup/cleanup helpers
+
+### Test Coverage
+
+The test suite includes:
+
+- ✅ Database operations (CRUD, idempotency)
+- ✅ Redis queue operations (push, pop, concurrency)
+- ✅ Worker processing (job execution, retries, DLQ)
+- ✅ API validation and error handling
+- ✅ End-to-end job lifecycle
+
+## Monitoring & Observability
+
+### Prometheus Metrics
+
+The system exposes comprehensive metrics:
+
+**API Metrics**:
+- `jobs_submitted_total{priority}` - Jobs submitted by priority
+- `jobs_submitted_errors_total{error_type}` - Submission errors
+- `grpc_requests_total{method,status}` - gRPC method calls
+- `grpc_request_duration_seconds{method}` - API latency
+
+**Worker Metrics**:
+- `jobs_processed_total{status}` - Jobs processed (success/failed/retry)
+- `job_processing_duration_seconds{type}` - Processing time
+- `jobs_retried_total{priority}` - Jobs scheduled for retry
+- `jobs_deadlettered_total{priority}` - Jobs moved to DLQ
+- `worker_inflight_jobs` - Current in-flight jobs
+- `queue_depth{priority}` - Queue depth by priority
+- `processing_queue_depth` - Jobs in processing queue
+
+**System Metrics**:
+- `retry_pump_jobs_requeued_total{priority}` - Retry pump activity
+- `reaper_jobs_recovered_total{priority}` - Stuck jobs recovered
+
+### Health Checks
+
+- **Liveness**: `GET /health` - Service is alive
+- **Readiness**: `GET /ready` - Dependencies (DB, Redis) are available
+
+### Grafana Dashboards
+
+Access Grafana at http://localhost:3000 to view:
+- Job submission rates
+- Processing throughput
+- Queue depths
+- Error rates
+- Processing latency
+
+## Deployment
+
+### Production Considerations
+
+1. **Database**: Use managed CockroachDB or PostgreSQL with proper connection pooling
+2. **Redis**: Use Redis Cluster or managed Redis for high availability
+3. **TLS**: Enable TLS for gRPC connections
+4. **Authentication**: Add gRPC authentication (mTLS, JWT, etc.)
+5. **Scaling**: Run multiple worker instances for horizontal scaling
+6. **Monitoring**: Set up alerting based on Prometheus metrics
+7. **Logging**: Use structured logging (JSON) with log aggregation
+
+### Docker Deployment
+
+```bash
+# Build images
+docker build -t scheduler-api ./cmd/api
+docker build -t scheduler-worker ./cmd/worker
+
+# Run with docker-compose
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+## Job Handlers
+
+### Supported Job Types
+
+1. **noop**: No-operation job (useful for testing)
+2. **http_call**: Make HTTP requests
+   ```json
+   {
+     "url": "https://api.example.com/endpoint",
+     "method": "POST",
+     "headers": {"Authorization": "Bearer token"},
+     "body": "{\"key\": \"value\"}"
+   }
+   ```
+3. **db_tx**: Execute database transactions
+   ```json
+   {
+     "query": "UPDATE users SET status = $1 WHERE id = $2",
+     "params": ["active", "123"]
+   }
+   ```
+
+### Adding Custom Handlers
+
+Extend `internal/worker/worker.go` `executeHandler()` method:
+
+```go
+case "custom_type":
+    // Parse payload
+    // Execute custom logic
+    // Return error on failure
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Jobs not processing**: Check worker logs, verify Redis connection
+2. **Database connection errors**: Verify CockroachDB is running and accessible
+3. **High queue depth**: Scale workers or investigate processing bottlenecks
+4. **Jobs stuck in processing**: Check reaper logs, verify worker is running
+
+### Debugging
+
+- Enable verbose logging: Set log level in code
+- Check metrics: `curl http://localhost:2112/metrics | grep job`
+- Inspect queues: `redis-cli LLEN q:high`
+- Query database: Connect to CockroachDB UI at http://localhost:8080
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Ensure all tests pass
+6. Submit a pull request
+
+## License
+
+[Add your license here]
+
+## Acknowledgments
+
+Built with:
+- [gRPC](https://grpc.io/)
+- [CockroachDB](https://www.cockroachlabs.com/)
+- [Redis](https://redis.io/)
+- [Prometheus](https://prometheus.io/)
+- [Grafana](https://grafana.com/)
