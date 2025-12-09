@@ -152,7 +152,7 @@ The system is designed for reliability, with features like:
 
 3. **Initialize database schema**:
    ```bash
-   make setup
+   make setup   
    # Or manually:
    ./scripts/setup.sh
    ```
@@ -378,9 +378,8 @@ The `deploy/docker-compose.yml` includes:
 ### Make Commands
 
 ```bash
+# Infrastructure
 make dev          # Start infrastructure (Redis, DB, Prometheus, Grafana)
-make api          # Run API server
-make worker       # Run worker
 make setup        # Initialize database schema
 make teardown     # Stop all services
 make clean        # Stop and remove volumes
@@ -388,12 +387,34 @@ make migrate      # Run database migrations
 make status       # Check service status
 make logs         # View service logs
 
+# Run applications (direct Go execution - fast iteration)
+make api          # Run API server
+make worker       # Run worker
+
+# Docker commands (consistent environment)
+make docker-build-api     # Build API server Docker image
+make docker-build-worker  # Build worker Docker image
+make docker-build         # Build both images
+make docker-run-api       # Run API server in Docker
+make docker-run-worker    # Run worker in Docker
+make docker-stop-api      # Stop API server container
+make docker-stop-worker   # Stop worker container
+make docker-stop          # Stop all containers
+make docker-logs-api      # View API server logs
+make docker-logs-worker   # View worker logs
+
 # Testing commands
 make test         # Setup test infrastructure (CockroachDB + Redis only) and run tests
 make test CLEAN=true  # Run tests and clean up infrastructure afterwards
 make test-setup   # Setup test infrastructure only (CockroachDB + Redis)
 make test-down    # Stop test infrastructure
 make test-clean   # Stop and remove test infrastructure containers
+
+# Job submission commands
+make test-jobs    # Submit test jobs
+make submit-mixed COUNT=200  # Submit mixed workload
+make submit-bulk COUNT=100 TYPE=noop PRIORITY=high  # Submit bulk jobs
+make load-test RATE=10 DURATION=60 PRIORITY=default  # Run load test
 ```
 
 ### Building

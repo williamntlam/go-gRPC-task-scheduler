@@ -1,0 +1,34 @@
+# Ignore files not needed in Docker build context
+.git
+.gitignore
+*.md
+README.md
+QUICKSTART.md
+tests/
+scripts/
+deploy/
+.env
+.env.local
+*.log
+bin/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test files
+*_test.go
+**/*_test.go
+
+# Documentation
+docs/
+*.md
+
+# Build artifacts
+bin/
+dist/
+*.exe
+*.dll
+*.so
+*.dylib

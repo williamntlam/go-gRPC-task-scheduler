@@ -1,4 +1,5 @@
 .PHONY: dev up down api worker migrate clean setup teardown test test-setup test-clean test-down
+.PHONY: docker-build-api docker-build-worker docker-build docker-run-api docker-run-worker docker-stop-api docker-stop-worker
 
 # Complete setup: start infrastructure and initialize database
 setup:
@@ -36,6 +37,98 @@ api:
 # Start the worker
 worker:
 	go run ./cmd/worker
+
+# ============================================================================
+# Docker Commands (for consistent development environment)
+# ============================================================================
+
+# Build Docker images
+docker-build-api:
+	@echo "🐳 Building API server Docker image..."
+	docker build -t scheduler-api:latest -f cmd/api/Dockerfile .
+
+docker-build-worker:
+	@echo "🐳 Building worker Docker image..."
+	docker build -t scheduler-worker:latest -f cmd/worker/Dockerfile .
+
+docker-build: docker-build-api docker-build-worker
+	@echo "✅ All Docker images built successfully!"
+
+# Run containers (connects to infrastructure network)
+# Note: Network name is auto-detected from docker-compose network
+docker-run-api: docker-build-api
+	@echo "🚀 Starting API server in Docker..."
+	@echo "ℹ️  Make sure infrastructure is running: make dev"
+	@NETWORK=$$(docker inspect cockroachdb --format='{{range $$k, $$v := .NetworkSettings.Networks}}{{$$k}}{{end}}' 2>/dev/null | head -1); \
+	if [ -z "$$NETWORK" ]; then \
+		echo "❌ Error: Infrastructure not running. Run 'make dev' first."; \
+		exit 1; \
+	fi; \
+	echo "📡 Connecting to network: $$NETWORK"; \
+	docker run -d --rm \
+		--name scheduler-api \
+		--network $$NETWORK \
+		-p 8081:8081 \
+		-p 2112:2112 \
+		-e GRPC_PORT=8081 \
+		-e METRICS_PORT=2112 \
+		-e COCKROACHDB_HOST=cockroachdb \
+		-e COCKROACHDB_PORT=26257 \
+		-e COCKROACHDB_USER=root \
+		-e COCKROACHDB_PASSWORD= \
+		-e COCKROACHDB_DATABASE=scheduler \
+		-e COCKROACHDB_SSLMODE=disable \
+		-e REDIS_HOST=redis \
+		-e REDIS_PORT=6379 \
+		-e REDIS_PASSWORD= \
+		scheduler-api:latest
+	@echo "✅ API server started! Logs: docker logs -f scheduler-api"
+
+docker-run-worker: docker-build-worker
+	@echo "🚀 Starting worker in Docker..."
+	@echo "ℹ️  Make sure infrastructure is running: make dev"
+	@NETWORK=$$(docker inspect cockroachdb --format='{{range $$k, $$v := .NetworkSettings.Networks}}{{$$k}}{{end}}' 2>/dev/null | head -1); \
+	if [ -z "$$NETWORK" ]; then \
+		echo "❌ Error: Infrastructure not running. Run 'make dev' first."; \
+		exit 1; \
+	fi; \
+	echo "📡 Connecting to network: $$NETWORK"; \
+	docker run -d --rm \
+		--name scheduler-worker \
+		--network $$NETWORK \
+		-p 2113:2113 \
+		-e WORKER_POOL_SIZE=10 \
+		-e METRICS_PORT=2113 \
+		-e COCKROACHDB_HOST=cockroachdb \
+		-e COCKROACHDB_PORT=26257 \
+		-e COCKROACHDB_USER=root \
+		-e COCKROACHDB_PASSWORD= \
+		-e COCKROACHDB_DATABASE=scheduler \
+		-e COCKROACHDB_SSLMODE=disable \
+		-e REDIS_HOST=redis \
+		-e REDIS_PORT=6379 \
+		-e REDIS_PASSWORD= \
+		scheduler-worker:latest
+	@echo "✅ Worker started! Logs: docker logs -f scheduler-worker"
+
+# Stop containers
+docker-stop-api:
+	@echo "🛑 Stopping API server container..."
+	@docker stop scheduler-api 2>/dev/null || echo "API server container not running"
+
+docker-stop-worker:
+	@echo "🛑 Stopping worker container..."
+	@docker stop scheduler-worker 2>/dev/null || echo "Worker container not running"
+
+docker-stop: docker-stop-api docker-stop-worker
+	@echo "✅ All containers stopped"
+
+# View container logs
+docker-logs-api:
+	docker logs -f scheduler-api
+
+docker-logs-worker:
+	docker logs -f scheduler-worker
 
 # Run database migrations (runs setup.sh to create/update schema)
 migrate:

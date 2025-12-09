@@ -39,23 +39,31 @@ This creates the database schema. **Only needed once** (or after `make clean`).
 
 ### Step 3: Start API Server (Terminal 2)
 
-Start the gRPC API server:
-
+**Option A: Direct Go execution (fast iteration, recommended for development)**
 ```bash
 make api
 ```
 
-Keep this terminal open. The API server runs on port **8081**.
+**Option B: Docker (consistent environment)**
+```bash
+make docker-run-api
+```
+
+Keep this terminal open (or run in background with Docker). The API server runs on port **8081**.
 
 ### Step 4: Start Worker (Terminal 3)
 
-Start the worker that processes jobs:
-
+**Option A: Direct Go execution (fast iteration, recommended for development)**
 ```bash
 make worker
 ```
 
-Keep this terminal open. The worker will start processing jobs from the queues.
+**Option B: Docker (consistent environment)**
+```bash
+make docker-run-worker
+```
+
+Keep this terminal open (or run in background with Docker). The worker will start processing jobs from the queues.
 
 ### Step 5: Verify Everything is Running
 
@@ -197,7 +205,16 @@ make logs
 
 ### Stop API Server and Worker
 
+**If using direct Go execution:**
 In Terminal 2 and Terminal 3, press **Ctrl+C** to stop the API server and worker.
+
+**If using Docker:**
+```bash
+make docker-stop
+# Or individually:
+make docker-stop-api
+make docker-stop-worker
+```
 
 ### Stop Infrastructure
 
@@ -221,6 +238,7 @@ make clean
 
 ## Complete Example Workflow
 
+**Using Direct Go Execution (Fast Development):**
 ```bash
 # Terminal 1: Start infrastructure
 make dev
@@ -241,6 +259,29 @@ make load-test RATE=20 DURATION=60 PRIORITY=high
 
 # When done: Stop everything
 # Ctrl+C in Terminal 2 and 3
+make down
+```
+
+**Using Docker (Consistent Environment):**
+```bash
+# Terminal 1: Start infrastructure
+make dev
+make setup
+
+# Terminal 2: Start API server in Docker
+make docker-run-api
+
+# Terminal 3: Start worker in Docker
+make docker-run-worker
+
+# Terminal 4: Submit jobs and test
+make test-jobs
+make submit-mixed COUNT=200
+
+# View logs: docker logs -f scheduler-api (or scheduler-worker)
+
+# When done: Stop everything
+make docker-stop
 make down
 ```
 
