@@ -704,6 +704,8 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 				log.Printf("[Worker] DLQ: Failed to push job to DLQ queue: job_id=%s, queue=%s, error: %v", job.TaskID, dlqQueueName, pushErr)
 			} else {
 				log.Printf("[Worker] DLQ: Pushed job to DLQ queue: job_id=%s, queue=%s", job.TaskID, dlqQueueName)
+				// Track job moved to DLQ (increment when successfully pushed to DLQ queue)
+				metrics.JobsDeadlettered.WithLabelValues(job.Priority).Inc()
 			}
 		}
 
@@ -773,6 +775,9 @@ func (w *Worker) handleJobFailure(ctx context.Context, job *db.Job, err error) {
 	log.Printf("[Worker] Job scheduled for retry: job_id=%s, attempt=%d/%d, next_run_at=%s, delay=%v", 
 		job.TaskID, job.Attempts, job.MaxAttempts, nextRunAt.Format(time.RFC3339), delay)
 	w.markJobRetry(ctx, job.TaskID, err.Error(), nextRunAt)
+	
+	// Track job scheduled for retry
+	metrics.JobsRetried.WithLabelValues(job.Priority).Inc()
 
 	// STEP 2.5: Update task attempt record on failure (retry path)
 	// After marking job for retry, update the task_attempts record
@@ -1172,6 +1177,9 @@ func (w *Worker) requeueRetryJob(ctx context.Context, jobID uuid.UUID, jobType, 
 	}
 
 	log.Printf("[RetryPump] Job requeued successfully: job_id=%s, queue=%s", jobID, redis.GetQueueName(priority))
+	
+	// Track retry pump activity
+	metrics.RetryPumpJobsRequeued.WithLabelValues(priority).Inc()
 
 	// STEP 7: Return nil on success
 	// If all steps succeeded, return nil
