@@ -11,6 +11,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"google.golang.org/grpc"
+	// "google.golang.org/grpc/credentials" // Uncomment when implementing TLS
 	"google.golang.org/grpc/reflection"
 
 	"net/http"
@@ -127,8 +128,49 @@ func main() {
 	defer redis.CloseClient(redisClient)
 	log.Println("Connected to Redis")
 
+	// ============================================================================
+	// TLS CONFIGURATION
+	// ============================================================================
+	// Load TLS credentials for the gRPC server
+	// If TLS certificates are provided, use them; otherwise run in insecure mode
+	// TODO: Implement TLS loading
+	// Step 1: Call loadServerTLSConfig() to get TLS credentials
+	// Step 2: If credentials are returned, create server with grpc.Creds(creds)
+	// Step 3: If nil (no TLS), create server without credentials (insecure mode)
+	// Step 4: Log whether TLS is enabled or not
+	//
+	// Example:
+	//   serverCreds, err := loadServerTLSConfig()
+	//   if err != nil {
+	//       log.Fatalf("Failed to load TLS credentials: %v", err)
+	//   }
+	//   var grpcServer *grpc.Server
+	//   if serverCreds != nil {
+	//       log.Println("TLS enabled for gRPC server")
+	//       grpcServer = grpc.NewServer(grpc.Creds(serverCreds))
+	//   } else {
+	//       log.Println("WARNING: Running gRPC server in insecure mode (no TLS)")
+	//       grpcServer = grpc.NewServer()
+	//   }
+	
+	// TODO: Uncomment and implement the TLS loading above
+	// serverCreds, err := loadServerTLSConfig()
+	// if err != nil {
+	//     log.Fatalf("Failed to load TLS credentials: %v", err)
+	// }
+	// 
+	// var grpcServer *grpc.Server
+	// if serverCreds != nil {
+	//     log.Println("TLS enabled for gRPC server")
+	//     grpcServer = grpc.NewServer(grpc.Creds(serverCreds))
+	// } else {
+	//     log.Println("WARNING: Running gRPC server in insecure mode (no TLS)")
+	//     grpcServer = grpc.NewServer()
+	// }
+	
 	// Create gRPC server with interceptors (metrics, tracing, etc.)
 	// TODO: Add interceptors for metrics, tracing, logging
+	// TODO: Implement TLS loading above and use it here
 	grpcServer := grpc.NewServer(
 		// grpc.UnaryInterceptor(...), // Add metrics interceptor
 		// grpc.StreamInterceptor(...), // Add streaming interceptor
