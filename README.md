@@ -29,6 +29,7 @@ The gRPC Task Scheduler is a distributed job scheduling system that allows you t
 - **Scale horizontally** by running multiple worker instances
 
 The system is designed for reliability, with features like:
+
 - Idempotent job submission
 - Job state persistence in CockroachDB
 - Priority-based queuing in Redis
@@ -117,7 +118,7 @@ The system is designed for reliability, with features like:
 - **Queue**: Redis 7
 - **Metrics**: Prometheus
 - **Visualization**: Grafana
-- **Testing**: 
+- **Testing**:
   - `testify` - Third-party testing framework for assertions and test utilities
   - `testutil` - Project-specific package for test setup/cleanup (database, Redis)
 
@@ -138,12 +139,14 @@ The system is designed for reliability, with features like:
 ### Quick Start
 
 1. **Clone the repository**:
+
    ```bash
    git clone <repository-url>
    cd go-gRPC-task-scheduler
    ```
 
 2. **Start infrastructure services**:
+
    ```bash
    make dev
    # Or manually:
@@ -151,13 +154,15 @@ The system is designed for reliability, with features like:
    ```
 
 3. **Initialize database schema**:
+
    ```bash
-   make setup   
+   make setup
    # Or manually:
    ./scripts/setup.sh
    ```
 
 4. **Start the API server** (in one terminal):
+
    ```bash
    make api
    # Or manually:
@@ -165,6 +170,7 @@ The system is designed for reliability, with features like:
    ```
 
 5. **Start the worker** (in another terminal):
+
    ```bash
    make worker
    # Or manually:
@@ -216,6 +222,7 @@ resp, _ := client.SubmitJob(ctx, &schedulerv1.SubmitJobRequest{
 Submit a new job for processing.
 
 **Request**:
+
 ```protobuf
 message SubmitJobRequest {
     Job job = 1;
@@ -231,6 +238,7 @@ message Job {
 ```
 
 **Response**:
+
 ```protobuf
 message SubmitJobResponse {
     string job_id = 1;  // UUID of the created job
@@ -242,6 +250,7 @@ message SubmitJobResponse {
 Get the current status of a job.
 
 **Request**:
+
 ```protobuf
 message GetJobRequest {
     string job_id = 1;  // UUID of the job
@@ -249,6 +258,7 @@ message GetJobRequest {
 ```
 
 **Response**:
+
 ```protobuf
 message JobStatus {
     string job_id = 1;
@@ -266,6 +276,7 @@ message JobStatus {
 Stream real-time job status updates (server streaming).
 
 **Request**:
+
 ```protobuf
 message WatchJobRequest {
     string job_id = 1;
@@ -279,6 +290,7 @@ message WatchJobRequest {
 Cancel a queued or running job.
 
 **Request**:
+
 ```protobuf
 message CancelJobRequest {
     string job_id = 1;
@@ -286,6 +298,7 @@ message CancelJobRequest {
 ```
 
 **Response**:
+
 ```protobuf
 message CancelJobResponse {
     bool cancelled = 1;
@@ -297,6 +310,7 @@ message CancelJobResponse {
 List jobs with optional filters and pagination.
 
 **Request**:
+
 ```protobuf
 message ListJobsRequest {
     JobState state_filter = 1;
@@ -308,6 +322,7 @@ message ListJobsRequest {
 ```
 
 **Response**:
+
 ```protobuf
 message ListJobsResponse {
     repeated JobStatus jobs = 1;
@@ -432,6 +447,7 @@ go build -o bin/worker ./cmd/worker
 ### Running Tests
 
 **Recommended: Use the Makefile target** (starts only test infrastructure):
+
 ```bash
 # Run all tests (starts only CockroachDB + Redis, not Prometheus/Grafana)
 # Includes a summary with pass/fail counts at the end
@@ -445,6 +461,7 @@ make test-setup
 ```
 
 The test output includes a summary at the end showing:
+
 - Number of tests passed ✅
 - Number of tests failed ❌
 - Number of tests skipped ⏭️ (if any)
@@ -452,6 +469,7 @@ The test output includes a summary at the end showing:
 - Overall status (SUCCESS/FAILED)
 
 **Manual testing** (requires infrastructure to be running):
+
 ```bash
 # Run all tests
 go test ./tests/... -v
@@ -467,10 +485,12 @@ go tool cover -html=coverage.out
 ### Test Infrastructure
 
 The test infrastructure includes:
+
 - **CockroachDB**: For database tests (uses `scheduler_test` database)
 - **Redis**: For queue tests (uses DB 1 to avoid conflicts)
 
 Test infrastructure does NOT include:
+
 - Prometheus (not needed for tests)
 - Grafana (not needed for tests)
 
@@ -497,12 +517,14 @@ The test suite includes:
 The system exposes comprehensive metrics:
 
 **API Metrics**:
+
 - `jobs_submitted_total{priority}` - Jobs submitted by priority
 - `jobs_submitted_errors_total{error_type}` - Submission errors
 - `grpc_requests_total{method,status}` - gRPC method calls
 - `grpc_request_duration_seconds{method}` - API latency
 
 **Worker Metrics**:
+
 - `jobs_processed_total{status}` - Jobs processed (success/failed/retry)
 - `job_processing_duration_seconds{type}` - Processing time
 - `jobs_retried_total{priority}` - Jobs scheduled for retry
@@ -512,6 +534,7 @@ The system exposes comprehensive metrics:
 - `processing_queue_depth` - Jobs in processing queue
 
 **System Metrics**:
+
 - `retry_pump_jobs_requeued_total{priority}` - Retry pump activity
 - `reaper_jobs_recovered_total{priority}` - Stuck jobs recovered
 
@@ -523,6 +546,7 @@ The system exposes comprehensive metrics:
 ### Grafana Dashboards
 
 Access Grafana at http://localhost:3000 to view:
+
 - Job submission rates
 - Processing throughput
 - Queue depths
@@ -562,7 +586,7 @@ docker compose -f deploy/docker-compose.yml up -d
    {
      "url": "https://api.example.com/endpoint",
      "method": "POST",
-     "headers": {"Authorization": "Bearer token"},
+     "headers": { "Authorization": "Bearer token" },
      "body": "{\"key\": \"value\"}"
    }
    ```
@@ -617,6 +641,7 @@ case "custom_type":
 ## Acknowledgments
 
 Built with:
+
 - [gRPC](https://grpc.io/)
 - [CockroachDB](https://www.cockroachlabs.com/)
 - [Redis](https://redis.io/)

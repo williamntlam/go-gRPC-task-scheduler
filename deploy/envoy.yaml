@@ -49,7 +49,7 @@ static_resources:
     - name: api_cluster
       connect_timeout: 5s
       type: STRICT_DNS
-      lb_policy: ROUND_ROBIN  # Load balancing policy: ROUND_ROBIN, LEAST_REQUEST, RING_HASH
+      lb_policy: ROUND_ROBIN # Load balancing policy: ROUND_ROBIN, LEAST_REQUEST, RING_HASH
       http2_protocol_options: {}
       # Optional: Enable TLS from Envoy to Go app (end-to-end encryption)
       # Uncomment if you need TLS all the way to the application:
@@ -105,4 +105,3 @@ admin:
       protocol: TCP
       address: 0.0.0.0
       port_value: 9901
-

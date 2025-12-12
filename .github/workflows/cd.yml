@@ -2,13 +2,13 @@ name: Build and Push Images
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
 
 env:
-  GO_VERSION: '1.24'
+  GO_VERSION: "1.24"
   DOCKER_BUILDKIT: 1
 
 jobs:

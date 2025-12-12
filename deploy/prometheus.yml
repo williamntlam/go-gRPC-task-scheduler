@@ -4,21 +4,20 @@ global:
 
 scrape_configs:
   # API server metrics
-  - job_name: 'api'
+  - job_name: "api"
     static_configs:
-      - targets: ['host.docker.internal:2112']
+      - targets: ["host.docker.internal:2112"]
         labels:
-          service: 'api'
+          service: "api"
 
   # Worker metrics
-  - job_name: 'worker'
+  - job_name: "worker"
     static_configs:
-      - targets: ['host.docker.internal:2113']
+      - targets: ["host.docker.internal:2113"]
         labels:
-          service: 'worker'
+          service: "worker"
 
   # Prometheus itself
-  - job_name: 'prometheus'
+  - job_name: "prometheus"
     static_configs:
-      - targets: ['localhost:9090']
-
+      - targets: ["localhost:9090"]

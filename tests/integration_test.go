@@ -92,7 +92,7 @@ func TestEndToEndJobFlow(t *testing.T) {
 	t.Run("job retry flow", func(t *testing.T) {
 		// Create a new worker for this test to avoid conflicts
 		w2 := worker.NewWorker(dbPool, redisClient, 2)
-		
+
 		// Create a job that will fail
 		jobID := uuid.New()
 		job := db.Job{

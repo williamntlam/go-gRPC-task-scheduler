@@ -5,8 +5,8 @@ services:
     container_name: cockroachdb
     command: start-single-node --insecure --http-addr=:8080
     ports:
-      - "26257:26257"  # SQL port
-      - "8082:8080"    # Admin UI (changed to avoid conflict with Envoy on 8080)
+      - "26257:26257" # SQL port
+      - "8082:8080" # Admin UI (changed to avoid conflict with Envoy on 8080)
     volumes:
       - cockroachdb-data:/cockroach/cockroach-data
     networks:
@@ -46,8 +46,8 @@ services:
     networks:
       - scheduler-network
     command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
       interval: 30s
@@ -82,8 +82,8 @@ services:
     image: envoyproxy/envoy:v1.29-latest
     container_name: envoy
     ports:
-      - "8080:8080"    # gRPC endpoint (load balanced, TLS terminated here)
-      - "9901:9901"    # Admin interface
+      - "8080:8080" # gRPC endpoint (load balanced, TLS terminated here)
+      - "9901:9901" # Admin interface
     volumes:
       - ./envoy.yaml:/etc/envoy/envoy.yaml
       # Mount TLS certificates for TLS termination (one-way TLS)
@@ -108,8 +108,8 @@ services:
       dockerfile: cmd/api/Dockerfile
     container_name: api
     ports:
-      - "8081:8081"    # Direct access (bypass load balancer)
-      - "2112:2112"    # Metrics
+      - "8081:8081" # Direct access (bypass load balancer)
+      - "2112:2112" # Metrics
     environment:
       - GRPC_PORT=8081
       - METRICS_PORT=2112
@@ -142,8 +142,8 @@ services:
       dockerfile: cmd/api/Dockerfile
     container_name: api-2
     ports:
-      - "8083:8081"    # Direct access
-      - "2114:2112"    # Metrics
+      - "8083:8081" # Direct access
+      - "2114:2112" # Metrics
     environment:
       - GRPC_PORT=8081
       - METRICS_PORT=2112
@@ -176,8 +176,8 @@ services:
       dockerfile: cmd/api/Dockerfile
     container_name: api-3
     ports:
-      - "8084:8081"    # Direct access
-      - "2115:2112"    # Metrics
+      - "8084:8081" # Direct access
+      - "2115:2112" # Metrics
     environment:
       - GRPC_PORT=8081
       - METRICS_PORT=2112
@@ -212,4 +212,3 @@ volumes:
 networks:
   scheduler-network:
     driver: bridge
-

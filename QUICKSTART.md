@@ -23,6 +23,7 @@ make dev
 ```
 
 Wait a few seconds for services to be ready. You should see:
+
 - ✅ CockroachDB UI: http://localhost:8080
 - ✅ Grafana: http://localhost:3000 (admin/admin)
 - ✅ Prometheus: http://localhost:9090
@@ -40,11 +41,13 @@ This creates the database schema. **Only needed once** (or after `make clean`).
 ### Step 3: Start API Server (Terminal 2)
 
 **Option A: Direct Go execution (fast iteration, recommended for development)**
+
 ```bash
 make api
 ```
 
 **Option B: Docker (consistent environment)**
+
 ```bash
 make docker-run-api
 ```
@@ -54,11 +57,13 @@ Keep this terminal open (or run in background with Docker). The API server runs 
 ### Step 4: Start Worker (Terminal 3)
 
 **Option A: Direct Go execution (fast iteration, recommended for development)**
+
 ```bash
 make worker
 ```
 
 **Option B: Docker (consistent environment)**
+
 ```bash
 make docker-run-worker
 ```
@@ -74,6 +79,7 @@ make status
 ```
 
 You should see all services running:
+
 - `cockroachdb` - Database
 - `redis` - Queue
 - `prometheus` - Metrics
@@ -168,6 +174,7 @@ make get-job JOB_ID=550e8400-e29b-41d4-a716-446655440000
 4. Watch metrics update in real-time
 
 **Key Metrics:**
+
 - **Jobs Submitted (Rate)** - Submission throughput
 - **Jobs Processed (Rate)** - Processing throughput by status
 - **Queue Depth by Priority** - Current queue sizes
@@ -180,6 +187,7 @@ make get-job JOB_ID=550e8400-e29b-41d4-a716-446655440000
 Query metrics directly at http://localhost:9090
 
 Example queries:
+
 ```promql
 # Total jobs submitted
 sum(jobs_submitted_total)
@@ -209,6 +217,7 @@ make logs
 In Terminal 2 and Terminal 3, press **Ctrl+C** to stop the API server and worker.
 
 **If using Docker:**
+
 ```bash
 make docker-stop
 # Or individually:
@@ -239,6 +248,7 @@ make clean
 ## Complete Example Workflow
 
 **Using Direct Go Execution (Fast Development):**
+
 ```bash
 # Terminal 1: Start infrastructure
 make dev
@@ -263,6 +273,7 @@ make down
 ```
 
 **Using Docker (Consistent Environment):**
+
 ```bash
 # Terminal 1: Start infrastructure
 make dev
@@ -331,17 +342,17 @@ make down
 
 ## Quick Reference
 
-| Command | Description |
-|---------|-------------|
-| `make dev` | Start infrastructure services |
-| `make setup` | Initialize database (one-time) |
-| `make api` | Start API server |
-| `make worker` | Start worker |
-| `make test-jobs` | Submit test jobs |
-| `make submit-mixed COUNT=200` | Submit mixed workload |
-| `make submit-bulk COUNT=100 TYPE=noop PRIORITY=high` | Submit bulk jobs |
-| `make load-test RATE=10 DURATION=60 PRIORITY=default` | Run load test |
-| `make status` | Check service status |
-| `make logs` | View service logs |
-| `make down` | Stop infrastructure |
-| `make clean` | Stop and remove everything |
+| Command                                               | Description                    |
+| ----------------------------------------------------- | ------------------------------ |
+| `make dev`                                            | Start infrastructure services  |
+| `make setup`                                          | Initialize database (one-time) |
+| `make api`                                            | Start API server               |
+| `make worker`                                         | Start worker                   |
+| `make test-jobs`                                      | Submit test jobs               |
+| `make submit-mixed COUNT=200`                         | Submit mixed workload          |
+| `make submit-bulk COUNT=100 TYPE=noop PRIORITY=high`  | Submit bulk jobs               |
+| `make load-test RATE=10 DURATION=60 PRIORITY=default` | Run load test                  |
+| `make status`                                         | Check service status           |
+| `make logs`                                           | View service logs              |
+| `make down`                                           | Stop infrastructure            |
+| `make clean`                                          | Stop and remove everything     |

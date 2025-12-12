@@ -1,0 +1,13 @@
+{
+  "name": "go-grpc-task-scheduler",
+  "version": "1.0.0",
+  "description": "Prettier configuration for formatting YAML, JSON, and Markdown files",
+  "scripts": {
+    "format": "prettier --write \"**/*.{yml,yaml,json,md}\"",
+    "format:check": "prettier --check \"**/*.{yml,yaml,json,md}\"",
+    "lint": "npm run format:check"
+  },
+  "devDependencies": {
+    "prettier": "^3.2.5"
+  }
+}

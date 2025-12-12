@@ -5,11 +5,13 @@ Scripts to submit jobs to the task scheduler for testing and observing metrics i
 ## Prerequisites
 
 1. **Install grpcurl** (if not already installed):
+
    ```bash
    go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
    ```
 
 2. **Start the services**:
+
    ```bash
    make dev        # Start infrastructure (DB, Redis, Prometheus, Grafana)
    make api        # Start API server (in one terminal)
@@ -29,11 +31,13 @@ Scripts to submit jobs to the task scheduler for testing and observing metrics i
 Submit one job with custom parameters.
 
 **Usage:**
+
 ```bash
 ./scripts/submit-job.sh [type] [priority] [max_attempts] [payload_json]
 ```
 
 **Examples:**
+
 ```bash
 # Simple noop job
 ./scripts/submit-job.sh noop high 3
@@ -46,6 +50,7 @@ Submit one job with custom parameters.
 ```
 
 **Parameters:**
+
 - `type`: `noop`, `http_call`, or `db_tx`
 - `priority`: `critical`, `high`, `default`, or `low`
 - `max_attempts`: Number (default: 3)
@@ -58,11 +63,13 @@ Submit one job with custom parameters.
 Submit multiple jobs of the same type/priority in bulk.
 
 **Usage:**
+
 ```bash
 ./scripts/submit-jobs-bulk.sh [count] [type] [priority] [delay_ms]
 ```
 
 **Examples:**
+
 ```bash
 # Submit 100 high-priority noop jobs with 100ms delay
 ./scripts/submit-jobs-bulk.sh 100 noop high 100
@@ -75,6 +82,7 @@ Submit multiple jobs of the same type/priority in bulk.
 ```
 
 **Parameters:**
+
 - `count`: Number of jobs to submit
 - `type`: `noop`, `http_call`, or `db_tx`
 - `priority`: `critical`, `high`, `default`, or `low`
@@ -87,11 +95,13 @@ Submit multiple jobs of the same type/priority in bulk.
 Submit a realistic mix of different job types and priorities.
 
 **Usage:**
+
 ```bash
 ./scripts/submit-jobs-mixed.sh [total_count]
 ```
 
 **Examples:**
+
 ```bash
 # Submit 100 mixed jobs (20% critical, 30% high, 40% default, 10% low)
 ./scripts/submit-jobs-mixed.sh 100
@@ -101,6 +111,7 @@ Submit a realistic mix of different job types and priorities.
 ```
 
 **Distribution:**
+
 - Priorities: 20% critical, 30% high, 40% default, 10% low
 - Types: 50% noop, 30% http_call, 20% db_tx
 
@@ -111,11 +122,13 @@ Submit a realistic mix of different job types and priorities.
 Submit jobs at a constant rate for a specified duration.
 
 **Usage:**
+
 ```bash
 ./scripts/load-test.sh [rate_per_sec] [duration_sec] [priority]
 ```
 
 **Examples:**
+
 ```bash
 # 10 jobs/sec for 60 seconds, high priority
 ./scripts/load-test.sh 10 60 high
@@ -128,6 +141,7 @@ Submit jobs at a constant rate for a specified duration.
 ```
 
 **Parameters:**
+
 - `rate_per_sec`: Jobs per second (default: 10)
 - `duration_sec`: How long to run (default: 60)
 - `priority`: `critical`, `high`, `default`, or `low`
@@ -139,11 +153,13 @@ Submit jobs at a constant rate for a specified duration.
 Get the status of a specific job.
 
 **Usage:**
+
 ```bash
 ./scripts/get-job.sh [job_id]
 ```
 
 **Example:**
+
 ```bash
 ./scripts/get-job.sh 550e8400-e29b-41d4-a716-446655440000
 ```
@@ -153,6 +169,7 @@ Get the status of a specific job.
 ## Testing Scenarios
 
 ### Scenario 1: Basic Testing
+
 ```bash
 # Submit a few jobs
 ./scripts/submit-job.sh noop high 3
@@ -164,6 +181,7 @@ Get the status of a specific job.
 ```
 
 ### Scenario 2: Queue Behavior
+
 ```bash
 # Submit 50 high-priority jobs
 ./scripts/submit-jobs-bulk.sh 50 noop high 50
@@ -175,6 +193,7 @@ Get the status of a specific job.
 ```
 
 ### Scenario 3: Load Testing
+
 ```bash
 # Start a sustained load
 ./scripts/load-test.sh 20 120 default
@@ -186,6 +205,7 @@ Get the status of a specific job.
 ```
 
 ### Scenario 4: Mixed Workload
+
 ```bash
 # Submit realistic mixed workload
 ./scripts/submit-jobs-mixed.sh 200
@@ -197,6 +217,7 @@ Get the status of a specific job.
 ```
 
 ### Scenario 5: Burst Testing
+
 ```bash
 # Submit many jobs quickly (no delay)
 ./scripts/submit-jobs-bulk.sh 1000 noop high 0
@@ -212,6 +233,7 @@ Get the status of a specific job.
 ## Observing Metrics
 
 ### Grafana Dashboard
+
 1. Open http://localhost:3000
 2. Login: `admin` / `admin`
 3. Navigate to "Task Scheduler Dashboard"
@@ -220,18 +242,22 @@ Get the status of a specific job.
 ### Key Metrics to Watch
 
 **Submission Metrics:**
+
 - Jobs Submitted (Rate) - See your submission rate
 - Submission Errors (Rate) - Check for errors
 
 **Processing Metrics:**
+
 - Jobs Processed (Rate) - Success/failure/retry rates
 - Job Processing Duration (p95) - Performance
 
 **Queue Metrics:**
+
 - Queue Depth by Priority - Are queues backing up?
 - Processing Queue Depth - In-flight jobs
 
 **System Health:**
+
 - Worker In-Flight Jobs - Worker utilization
 - Jobs Retried (Rate) - Retry activity
 - Jobs Deadlettered (Rate) - Permanent failures
@@ -261,7 +287,7 @@ rate(jobs_submitted_errors_total[5m])
 1. **Start Small**: Begin with a few jobs to verify everything works
 2. **Watch Dashboards**: Keep Grafana open while submitting jobs
 3. **Vary Parameters**: Try different priorities, types, and rates
-4. **Observe Patterns**: 
+4. **Observe Patterns**:
    - How queues behave under load
    - Priority ordering (critical → high → default → low)
    - Retry behavior when jobs fail
@@ -272,14 +298,17 @@ rate(jobs_submitted_errors_total[5m])
 ## Troubleshooting
 
 **Script fails with "connection refused":**
+
 - Make sure API server is running: `make api`
 - Check GRPC_PORT environment variable matches your server
 
 **No metrics appearing:**
+
 - Verify Prometheus is scraping: http://localhost:9090/targets
 - Check API/Worker metrics endpoints: `curl http://localhost:2112/metrics`
 
 **Jobs not processing:**
+
 - Make sure worker is running: `make worker`
 - Check worker logs for errors
 - Verify Redis connection

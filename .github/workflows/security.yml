@@ -2,12 +2,12 @@ name: Security Scan
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   schedule:
     # Run weekly security scans
-    - cron: '0 0 * * 0'
+    - cron: "0 0 * * 0"
 
 jobs:
   # Scan Go dependencies for vulnerabilities
@@ -21,7 +21,7 @@ jobs:
       - name: Run Gosec Security Scanner
         uses: securego/gosec@master
         with:
-          args: '-no-fail -fmt json -out gosec-report.json ./...'
+          args: "-no-fail -fmt json -out gosec-report.json ./..."
 
       - name: Upload Gosec results
         uses: actions/upload-artifact@v4
@@ -45,23 +45,23 @@ jobs:
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'scheduler-api:scan'
-          format: 'sarif'
-          output: 'trivy-api-results.sarif'
+          image-ref: "scheduler-api:scan"
+          format: "sarif"
+          output: "trivy-api-results.sarif"
 
       - name: Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: 'trivy-api-results.sarif'
+          sarif_file: "trivy-api-results.sarif"
 
       - name: Run Trivy on worker image
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: 'scheduler-worker:scan'
-          format: 'sarif'
-          output: 'trivy-worker-results.sarif'
+          image-ref: "scheduler-worker:scan"
+          format: "sarif"
+          output: "trivy-worker-results.sarif"
 
       - name: Upload worker Trivy results
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: 'trivy-worker-results.sarif'
+          sarif_file: "trivy-worker-results.sarif"

@@ -5,6 +5,7 @@ This guide explains how to set up TLS for your gRPC application.
 ## Overview
 
 TLS (Transport Layer Security) encrypts communication between gRPC clients and servers. This guide covers:
+
 - Server-side TLS (one-way authentication)
 - Client-side TLS configuration
 - Certificate generation for development
@@ -57,17 +58,17 @@ The server code in `cmd/api/main.go` already has TODOs showing where to integrat
 func loadServerTLSConfig() (credentials.TransportCredentials, error) {
     certPath := os.Getenv("TLS_CERT_PATH")
     keyPath := os.Getenv("TLS_KEY_PATH")
-    
+
     if certPath == "" || keyPath == "" {
         log.Println("TLS certificates not provided, running in insecure mode")
         return nil, nil
     }
-    
+
     creds, err := credentials.NewServerTLSFromFile(certPath, keyPath)
     if err != nil {
         return nil, fmt.Errorf("failed to load server TLS: %w", err)
     }
-    
+
     return creds, nil
 }
 ```
@@ -77,17 +78,17 @@ func loadServerTLSConfig() (credentials.TransportCredentials, error) {
 ```go
 func loadClientTLSConfig() (credentials.TransportCredentials, error) {
     caPath := os.Getenv("TLS_CA_PATH")
-    
+
     if caPath == "" {
         log.Println("TLS CA certificate not provided, using insecure connection")
         return nil, nil
     }
-    
+
     creds, err := credentials.NewClientTLSFromFile(caPath, "")
     if err != nil {
         return nil, fmt.Errorf("failed to load client TLS: %w", err)
     }
-    
+
     return creds, nil
 }
 ```
@@ -152,19 +153,20 @@ rm server.csr
 ### Production Certificates
 
 For production, use:
+
 - **Let's Encrypt** (free, automated)
 - **Your organization's CA** (for internal services)
 - **Commercial CA** (DigiCert, GlobalSign, etc.)
 
 ## Environment Variables
 
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `TLS_CERT_PATH` | Server certificate file path | Server only |
-| `TLS_KEY_PATH` | Server private key file path | Server only |
-| `TLS_CA_PATH` | CA certificate file path | Client only |
-| `TLS_CLIENT_CERT_PATH` | Client certificate (mTLS) | Optional |
-| `TLS_CLIENT_KEY_PATH` | Client private key (mTLS) | Optional |
+| Variable               | Description                  | Required    |
+| ---------------------- | ---------------------------- | ----------- |
+| `TLS_CERT_PATH`        | Server certificate file path | Server only |
+| `TLS_KEY_PATH`         | Server private key file path | Server only |
+| `TLS_CA_PATH`          | CA certificate file path     | Client only |
+| `TLS_CLIENT_CERT_PATH` | Client certificate (mTLS)    | Optional    |
+| `TLS_CLIENT_KEY_PATH`  | Client private key (mTLS)    | Optional    |
 
 ## Security Best Practices
 
@@ -217,4 +219,3 @@ See `cmd/api/tls.go` for client TLS loading examples.
 3. Test TLS connection locally
 4. Configure production certificates
 5. Update deployment scripts to mount certificates
-

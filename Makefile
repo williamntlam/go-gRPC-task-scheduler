@@ -1,7 +1,7 @@
 .PHONY: dev up down api worker migrate clean setup teardown test test-setup test-clean test-down
 .PHONY: docker-build-api docker-build-worker docker-build docker-run-api docker-run-worker docker-stop-api docker-stop-worker
 .PHONY: tls-certs tls-test tls-setup submit-job-tls envoy-status envoy-logs envoy-restart envoy-validate envoy-fix-certs
-.PHONY: ci-lint ci-test ci-build ci-all
+.PHONY: ci-lint ci-test ci-build ci-all format format-check
 
 # Complete setup: start infrastructure and initialize database
 setup:
@@ -458,4 +458,20 @@ ci-build:
 ci-all: ci-lint ci-test ci-build
 	@echo ""
 	@echo "✅ All CI checks passed!"
+
+# ============================================================================
+# Formatting Commands
+# ============================================================================
+
+# Format all files (Go + YAML/JSON/Markdown)
+format:
+	@echo "🎨 Formatting all files..."
+	@chmod +x scripts/format-all.sh
+	@./scripts/format-all.sh
+
+# Check formatting without modifying files
+format-check:
+	@echo "🔍 Checking file formatting..."
+	@chmod +x scripts/format-all.sh
+	@./scripts/format-all.sh --check
 

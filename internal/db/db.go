@@ -64,4 +64,3 @@ func ClosePool(pool *pgxpool.Pool) {
 		pool.Close()
 	}
 }
-

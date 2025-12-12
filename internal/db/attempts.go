@@ -54,12 +54,12 @@ func InsertAttempt(ctx context.Context, pool *pgxpool.Pool, taskID uuid.UUID) er
 // UpdateAttemptOnSuccess updates a task attempt record when a job succeeds
 // This should be called when a job completes successfully
 // Parameters:
-	//   - ctx: context.Context for cancellation/timeout
-	//   - pool: database connection pool
-	//   - taskID: UUID of the task/job
-	//
-	// Returns error if update fails
-	// Note: Updates the most recent attempt (where finished_at IS NULL)
+//   - ctx: context.Context for cancellation/timeout
+//   - pool: database connection pool
+//   - taskID: UUID of the task/job
+//
+// Returns error if update fails
+// Note: Updates the most recent attempt (where finished_at IS NULL)
 func UpdateAttemptOnSuccess(ctx context.Context, pool *pgxpool.Pool, taskID uuid.UUID) error {
 	// STEP 1: Build SQL UPDATE query
 	// Query should:
@@ -94,20 +94,20 @@ func UpdateAttemptOnSuccess(ctx context.Context, pool *pgxpool.Pool, taskID uuid
 
 	// STEP 3: Return nil on success
 	// Example: return nil
-	
+
 	return nil
 }
 
 // UpdateAttemptOnFailure updates a task attempt record when a job fails
 // This should be called when a job fails (whether it will retry or go to DLQ)
 // Parameters:
-	//   - ctx: context.Context for cancellation/timeout
-	//   - pool: database connection pool
-	//   - taskID: UUID of the task/job
-	//   - errorMsg: Error message describing why the job failed
-	//
-	// Returns error if update fails
-	// Note: Updates the most recent attempt (where finished_at IS NULL)
+//   - ctx: context.Context for cancellation/timeout
+//   - pool: database connection pool
+//   - taskID: UUID of the task/job
+//   - errorMsg: Error message describing why the job failed
+//
+// Returns error if update fails
+// Note: Updates the most recent attempt (where finished_at IS NULL)
 func UpdateAttemptOnFailure(ctx context.Context, pool *pgxpool.Pool, taskID uuid.UUID, errorMsg string) error {
 	// STEP 1: Build SQL UPDATE query
 	// Query should:
@@ -143,7 +143,6 @@ func UpdateAttemptOnFailure(ctx context.Context, pool *pgxpool.Pool, taskID uuid
 
 	// STEP 3: Return nil on success
 	// Example: return nil
-	
+
 	return nil
 }
-

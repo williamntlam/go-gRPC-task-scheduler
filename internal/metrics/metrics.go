@@ -238,7 +238,6 @@ var ReaperJobsRecovered = promauto.NewCounterVec(
 	[]string{"priority"},
 )
 
-
 // ============================================================================
 // STEP 4: Create API Server Metrics
 // ============================================================================

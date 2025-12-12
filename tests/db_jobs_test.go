@@ -352,7 +352,7 @@ func TestDatabaseConnectionErrors(t *testing.T) {
 		// Verify error message contains connection-related information
 		if err != nil {
 			// Error could be from ping, connection, or parsing
-			assert.True(t, 
+			assert.True(t,
 				containsAny(err.Error(), []string{"failed to", "connection", "refused", "timeout", "dial"}),
 				"Error should indicate connection failure, got: %s", err.Error())
 		}

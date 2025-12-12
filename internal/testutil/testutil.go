@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	redisc "github.com/redis/go-redis/v9"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/db"
 	"github.com/williamntlam/go-grpc-task-scheduler/internal/redis"
-	redisc "github.com/redis/go-redis/v9"
 )
 
 // TestConfig holds test configuration

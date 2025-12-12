@@ -51,7 +51,7 @@ type Server struct {
 	schedulerv1.UnimplementedSchedulerServiceServer
 
 	// Database connection pool
-	db *pgxpool.Pool
+	db    *pgxpool.Pool
 	redis *redisc.Client
 	// redis *redis.Client
 	// logger *zap.Logger
@@ -159,7 +159,7 @@ func jobStateToString(status schedulerv1.JobState) string {
 }
 
 func priorityToString(priority schedulerv1.Priority) string {
-	switch(priority) {
+	switch priority {
 	case schedulerv1.Priority_PRIORITY_CRITICAL:
 		return "critical"
 	case schedulerv1.Priority_PRIORITY_LOW:
@@ -203,18 +203,18 @@ func (s *Server) SubmitJob(ctx context.Context, req *schedulerv1.SubmitJobReques
 	job := req.Job // This is the Job struct from the request
 
 	// Extract job data from request (will be used when implementing database insert)
-	jobType := job.Type             // string (required - e.g., "noop", "http_call")
-	priority := job.Priority        // Priority enum (CRITICAL, HIGH, DEFAULT, LOW)
-	payloadJSON := job.PayloadJson  // string (optional JSON)
-	maxAttempts := job.MaxAttempts  // int32 (optional, defaults to 0 if not set)
+	jobType := job.Type            // string (required - e.g., "noop", "http_call")
+	priority := job.Priority       // Priority enum (CRITICAL, HIGH, DEFAULT, LOW)
+	payloadJSON := job.PayloadJson // string (optional JSON)
+	maxAttempts := job.MaxAttempts // int32 (optional, defaults to 0 if not set)
 
 	// Determine job_id:
 	// 1. If job_id provided by client, use it (enables idempotency - same job_id = same job)
 	// 2. Otherwise, generate new UUID
-	// 
+	//
 	// Idempotency: If job_id already exists in tasks table, return existing job
 	var jobID uuid.UUID
-		if job.JobId != "" {
+	if job.JobId != "" {
 		// Client provided job_id, parse it
 		parsedID, err := uuid.Parse(job.JobId)
 		if err != nil {
@@ -371,16 +371,16 @@ func (s *Server) GetJob(ctx context.Context, req *schedulerv1.GetJobRequest) (*s
 		// ============================================================================
 		metrics.GRPCRequests.WithLabelValues("GetJob", "error").Inc()
 		return nil, status.Error(codes.NotFound, "job not found")
-	} 
+	}
 
 	jobStatus := schedulerv1.JobStatus{
-		JobId:     job.TaskID.String(),
-		State:     statusToJobState(job.Status),
-		Attempts:  int32(job.Attempts),
-		LastError: "",
-		CreatedAt: timestamppb.New(job.CreatedAt),
-		UpdatedAt: timestamppb.New(job.UpdatedAt),
-		StartedAt: nil,
+		JobId:      job.TaskID.String(),
+		State:      statusToJobState(job.Status),
+		Attempts:   int32(job.Attempts),
+		LastError:  "",
+		CreatedAt:  timestamppb.New(job.CreatedAt),
+		UpdatedAt:  timestamppb.New(job.UpdatedAt),
+		StartedAt:  nil,
 		FinishedAt: nil,
 	}
 
@@ -443,7 +443,7 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 			return nil
 		case <-ticker.C:
 			// Time to poll the database and check for status changes
-			
+
 			// 1. Poll database using db.GetJobByID()
 			//    - Use stream.Context() as the context
 			//    - Handle errors (log and continue, or return)
@@ -477,27 +477,27 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 				metrics.GRPCRequests.WithLabelValues("WatchJob", "error").Inc()
 				return status.Error(codes.NotFound, "job not found")
 			}
-						
+
 			// 2. Check if status changed
 			//    - Compare current job.Status with lastStatus
 			//    - If different (or first poll), proceed to send event
-			
+
 			if job.Status != lastStatus || firstPoll {
 				log.Printf("[WatchJob] Job status changed: job_id=%s, old_status=%s, new_status=%s, attempts=%d", jobID, lastStatus, job.Status, job.Attempts)
 
 				// 3. Convert to JobEvent
 				//    - Create schedulerv1.JobEvent message
 				//    - Set all fields (JobId, State, Message, Timestamp, Attempts)
-				
+
 				// 4. Send the event
 				//    - Use stream.Send(&jobEvent)
 				//    - Handle send errors (return error if stream broken)
 
 				jobEvent := &schedulerv1.JobEvent{
-					JobId: job.TaskID.String(),
+					JobId:     job.TaskID.String(),
 					State:     statusToJobState(job.Status),
-					Message:   "Job status changed to " + job.Status,  // Human-readable message
-					Timestamp: timestamppb.Now(),  // Current time
+					Message:   "Job status changed to " + job.Status, // Human-readable message
+					Timestamp: timestamppb.Now(),                     // Current time
 					Attempts:  int32(job.Attempts),
 				}
 
@@ -513,7 +513,7 @@ func (s *Server) WatchJob(req *schedulerv1.WatchJobRequest, stream schedulerv1.S
 				firstPoll = false
 
 			}
-			
+
 			// 6. Check if job is complete (terminal states)
 			//    - If status is "succeeded", "failed", or "deadletter":
 			//      * return nil (exit loop, job is done)
@@ -634,7 +634,7 @@ func (s *Server) ListJobs(ctx context.Context, req *schedulerv1.ListJobsRequest)
 		req.StateFilter, req.PriorityFilter, req.TypeFilter, req.PageSize, req.PageToken)
 
 	// 1. Build query with filters (state, priority, type)
-	
+
 	priorityString := priorityToString(req.PriorityFilter)
 
 	// 2. Query CockroachDB with pagination
@@ -764,4 +764,3 @@ func (s *Server) ListJobs(ctx context.Context, req *schedulerv1.ListJobsRequest)
 		NextPageToken: nextPageToken,
 	}, nil
 }
-

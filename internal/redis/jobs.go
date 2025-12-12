@@ -31,9 +31,10 @@ type JobPayload struct {
 // 1. Call getQueueName(priority) to get the queue name (e.g., "q:critical")
 // 2. Validate that queueName is not empty (if empty, return an error)
 // 3. Create a JobPayload struct with:
-//    - TaskID: jobID.String()
-//    - Type: jobType
-//    - Priority: priority
+//   - TaskID: jobID.String()
+//   - Type: jobType
+//   - Priority: priority
+//
 // 4. Marshal the payload to JSON using json.Marshal()
 // 5. Handle any marshaling errors
 // 6. Use client.LPush(ctx, queueName, payloadJSON) to push to Redis
@@ -51,11 +52,11 @@ func PushJob(ctx context.Context, client *redis.Client, jobID uuid.UUID, jobType
 
 	// TODO: Step 3.3 - Create JobPayload struct
 	payload := JobPayload{
-		TaskID: jobID.String(),
-		Type: jobType,
+		TaskID:   jobID.String(),
+		Type:     jobType,
 		Priority: priority,
 	}
-	
+
 	// TODO: Step 3.4 - Marshal payload to JSON
 	payloadJSON, err := json.Marshal(payload)
 

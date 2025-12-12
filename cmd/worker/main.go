@@ -33,21 +33,21 @@ const (
 
 func startMetricsServer(port int, dbPool *pgxpool.Pool, redisClient *redisc.Client) {
 	mux := http.NewServeMux()
-	
+
 	// Metrics endpoint
 	mux.Handle("/metrics", promhttp.Handler())
-	
+
 	// Health check endpoint - checks if service is alive
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
-	
+
 	// Readiness endpoint - checks if dependencies are available
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		
+
 		// Check database connection
 		if err := dbPool.Ping(ctx); err != nil {
 			log.Printf("[Health] Database check failed: %v", err)
@@ -55,7 +55,7 @@ func startMetricsServer(port int, dbPool *pgxpool.Pool, redisClient *redisc.Clie
 			w.Write([]byte("Database unavailable"))
 			return
 		}
-		
+
 		// Check Redis connection
 		if err := redisClient.Ping(ctx).Err(); err != nil {
 			log.Printf("[Health] Redis check failed: %v", err)
@@ -63,16 +63,16 @@ func startMetricsServer(port int, dbPool *pgxpool.Pool, redisClient *redisc.Clie
 			w.Write([]byte("Redis unavailable"))
 			return
 		}
-		
+
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Ready"))
 	})
-	
+
 	log.Printf("Metrics and health server listening on :%d", port)
 	log.Printf("  - Metrics: http://localhost:%d/metrics", port)
 	log.Printf("  - Health:  http://localhost:%d/health", port)
 	log.Printf("  - Ready:   http://localhost:%d/ready", port)
-	
+
 	if err := http.ListenAndServe(":"+strconv.Itoa(port), mux); err != nil {
 		log.Fatalf("Failed to start metrics server: %v", err)
 	}
@@ -145,10 +145,10 @@ func main() {
 	// - Log success: log.Println("Connected to Redis")
 
 	redisConfig := redis.Config{
-		Host: utils.GetEnv("REDIS_HOST", "localhost"),
-		Port: utils.GetEnv("REDIS_PORT", "6379"),
+		Host:     utils.GetEnv("REDIS_HOST", "localhost"),
+		Port:     utils.GetEnv("REDIS_PORT", "6379"),
 		Password: utils.GetEnv("REDIS_PASSWORD", ""),
-		DB: 0,
+		DB:       0,
 	}
 
 	redisClient, err := redis.NewClient(context.Background(), redisConfig)

@@ -44,22 +44,22 @@ import (
 // 6. Handle errors appropriately (log and return)
 //
 // Example usage:
-//   creds, err := loadServerTLSConfig()
-//   if err != nil {
-//       log.Fatalf("Failed to load TLS credentials: %v", err)
-//   }
-//   if creds != nil {
-//       grpcServer := grpc.NewServer(grpc.Creds(creds))
-//   } else {
-//       grpcServer := grpc.NewServer() // Insecure mode
-//   }
+//
+//	creds, err := loadServerTLSConfig()
+//	if err != nil {
+//	    log.Fatalf("Failed to load TLS credentials: %v", err)
+//	}
+//	if creds != nil {
+//	    grpcServer := grpc.NewServer(grpc.Creds(creds))
+//	} else {
+//	    grpcServer := grpc.NewServer() // Insecure mode
+//	}
 func loadServerTLSConfig() (credentials.TransportCredentials, error) {
 	// Step 1: Get TLS_CERT_PATH from environment (use utils.GetEnv or os.Getenv)
 	// Step 2: Get TLS_KEY_PATH from environment
 	// Step 3: Check if both are set (if not, return nil, nil for insecure mode)
 	// Step 4: Use credentials.NewServerTLSFromFile(certPath, keyPath)
 	// Step 5: Return the credentials and any error
-	
 
 	certPath := utils.GetEnv("TLS_CERT_PATH", "")
 	keyPath := utils.GetEnv("TLS_KEY_PATH", "")
@@ -75,31 +75,32 @@ func loadServerTLSConfig() (credentials.TransportCredentials, error) {
 	}
 
 	return creds, nil
-	
+
 }
 
 // loadClientTLSConfig loads TLS credentials for a gRPC client
 // This function should:
-// 1. Read TLS_CA_PATH from environment variable (CA certificate path)
-// 2. If TLS_CA_PATH is set, load the CA certificate
-// 3. Use credentials.NewClientTLSFromFile(caPath, "") to create credentials
-//    (empty server name means use the server name from the connection)
-// 4. Return the credentials and nil error if successful
-// 5. If CA is not provided, return nil, nil (for development/insecure mode)
-// 6. Handle errors appropriately
+//  1. Read TLS_CA_PATH from environment variable (CA certificate path)
+//  2. If TLS_CA_PATH is set, load the CA certificate
+//  3. Use credentials.NewClientTLSFromFile(caPath, "") to create credentials
+//     (empty server name means use the server name from the connection)
+//  4. Return the credentials and nil error if successful
+//  5. If CA is not provided, return nil, nil (for development/insecure mode)
+//  6. Handle errors appropriately
 //
 // Example usage:
-//   creds, err := loadClientTLSConfig()
-//   if err != nil {
-//       log.Fatalf("Failed to load TLS credentials: %v", err)
-//   }
-//   var opts []grpc.DialOption
-//   if creds != nil {
-//       opts = append(opts, grpc.WithTransportCredentials(creds))
-//   } else {
-//       opts = append(opts, grpc.WithInsecure())
-//   }
-//   conn, err := grpc.Dial("server:8081", opts...)
+//
+//	creds, err := loadClientTLSConfig()
+//	if err != nil {
+//	    log.Fatalf("Failed to load TLS credentials: %v", err)
+//	}
+//	var opts []grpc.DialOption
+//	if creds != nil {
+//	    opts = append(opts, grpc.WithTransportCredentials(creds))
+//	} else {
+//	    opts = append(opts, grpc.WithInsecure())
+//	}
+//	conn, err := grpc.Dial("server:8081", opts...)
 func loadClientTLSConfig() (credentials.TransportCredentials, error) {
 	// TODO: Implement this function
 	// Step 1: Get TLS_CA_PATH from environment
@@ -107,7 +108,7 @@ func loadClientTLSConfig() (credentials.TransportCredentials, error) {
 	// Step 3: Use credentials.NewClientTLSFromFile(caPath, "")
 	//         (empty server name means use server name from connection)
 	// Step 4: Return the credentials and any error
-	
+
 	// Example structure:
 	// caPath := os.Getenv("TLS_CA_PATH")
 	// if caPath == "" {
@@ -129,17 +130,19 @@ func loadClientTLSConfig() (credentials.TransportCredentials, error) {
 // 1. Read TLS_CA_PATH, TLS_CLIENT_CERT_PATH, TLS_CLIENT_KEY_PATH from environment
 // 2. Load CA certificate, client certificate, and client key
 // 3. Create a tls.Config with:
-//    - RootCAs: CA certificate pool
-//    - Certificates: Client certificate and key
+//   - RootCAs: CA certificate pool
+//   - Certificates: Client certificate and key
+//
 // 4. Use credentials.NewTLS(config) to create credentials
 // 5. Return the credentials and any error
 //
 // Example usage (for client):
-//   creds, err := loadMutualTLSConfig()
-//   if err != nil {
-//       log.Fatalf("Failed to load mTLS credentials: %v", err)
-//   }
-//   conn, err := grpc.Dial("server:8081", grpc.WithTransportCredentials(creds))
+//
+//	creds, err := loadMutualTLSConfig()
+//	if err != nil {
+//	    log.Fatalf("Failed to load mTLS credentials: %v", err)
+//	}
+//	conn, err := grpc.Dial("server:8081", grpc.WithTransportCredentials(creds))
 func loadMutualTLSConfig() (credentials.TransportCredentials, error) {
 	// TODO: Implement this function (optional, for mTLS)
 	// This is more complex and requires:
@@ -147,12 +150,12 @@ func loadMutualTLSConfig() (credentials.TransportCredentials, error) {
 	// 2. Loading client certificate and key
 	// 3. Creating a tls.Config with both
 	// 4. Using credentials.NewTLS(config)
-	
+
 	// Example structure:
 	// caPath := os.Getenv("TLS_CA_PATH")
 	// clientCertPath := os.Getenv("TLS_CLIENT_CERT_PATH")
 	// clientKeyPath := os.Getenv("TLS_CLIENT_KEY_PATH")
-	// 
+	//
 	// // Load CA certificate
 	// caCert, err := os.ReadFile(caPath)
 	// if err != nil {
@@ -162,19 +165,19 @@ func loadMutualTLSConfig() (credentials.TransportCredentials, error) {
 	// if !caCertPool.AppendCertsFromPEM(caCert) {
 	//     return nil, fmt.Errorf("failed to parse CA certificate")
 	// }
-	// 
+	//
 	// // Load client certificate and key
 	// clientCert, err := tls.LoadX509KeyPair(clientCertPath, clientKeyPath)
 	// if err != nil {
 	//     return nil, err
 	// }
-	// 
+	//
 	// // Create TLS config
 	// config := &tls.Config{
 	//     RootCAs:      caCertPool,
 	//     Certificates: []tls.Certificate{clientCert},
 	// }
-	// 
+	//
 	// return credentials.NewTLS(config), nil
 
 	return nil, nil
@@ -189,7 +192,7 @@ func validateTLSFiles(certPath, keyPath string) error {
 	// Step 2: Check if keyPath file exists
 	// Step 3: Try to read both files to ensure they're readable
 	// Step 4: Return appropriate errors if files are missing or unreadable
-	
+
 	// Example structure:
 	// if _, err := os.Stat(certPath); os.IsNotExist(err) {
 	//     return fmt.Errorf("TLS certificate file not found: %s", certPath)
@@ -208,4 +211,3 @@ func validateTLSFiles(certPath, keyPath string) error {
 
 	return nil
 }
-

@@ -9,9 +9,11 @@ All CI/CD is handled through GitHub Actions. The workflows run automatically whe
 ## Workflows
 
 ### 1. CI (`ci.yml`)
+
 Runs on every push and pull request to `main` and `develop` branches.
 
 **Jobs:**
+
 - **Lint**: Code formatting and static analysis
 - **Unit Tests**: Fast unit tests with race detection
 - **Integration Tests**: Full integration tests with CockroachDB and Redis
@@ -20,30 +22,37 @@ Runs on every push and pull request to `main` and `develop` branches.
 - **System Test**: Full system test with Docker Compose
 
 ### 2. CD (`cd.yml`)
+
 Runs on pushes to `main` and when tags are created.
 
 **Jobs:**
+
 - **Build and Push**: Builds and pushes Docker images to GitHub Container Registry
 - **Deploy Staging**: Deploys to staging environment
 - **Deploy Production**: Deploys to production (only on version tags)
 
 ### 3. Release (`release.yml`)
+
 Creates GitHub releases when version tags are pushed.
 
 **Features:**
+
 - Runs full test suite
 - Generates changelog from git commits
 - Creates release with release notes
 
 ### 4. Security (`security.yml`)
+
 Security scanning for vulnerabilities.
 
 **Scans:**
+
 - Go code with Gosec
 - Docker images with Trivy
 - Runs weekly and on push/PR
 
 ### 5. Dependabot (`dependabot.yml`)
+
 Auto-merges Dependabot PRs for patch and minor updates.
 
 ## Setup

@@ -109,27 +109,26 @@ func JobExists(ctx context.Context, pool *pgxpool.Pool, jobID uuid.UUID) (bool, 
 	return exists, nil
 }
 
-
 func CancelJob(ctx context.Context, pool *pgxpool.Pool, jobID uuid.UUID) (bool, error) {
-    query := `
+	query := `
         UPDATE tasks 
         SET status = 'cancelled', updated_at = now() 
         WHERE task_id = $1 AND status IN ('queued', 'running')
         RETURNING task_id
     `
-    
-    var updatedTaskID uuid.UUID
-    err := pool.QueryRow(ctx, query, jobID).Scan(&updatedTaskID)
-    
-    if err != nil {
-        if err == pgx.ErrNoRows {
-            // No row was updated - job wasn't in a cancellable state
-            return false, nil
-        }
-        // Database error
-        return false, fmt.Errorf("failed to cancel job: %w", err)
-    }
-    
-    // Row was updated - job was successfully cancelled
-    return true, nil
+
+	var updatedTaskID uuid.UUID
+	err := pool.QueryRow(ctx, query, jobID).Scan(&updatedTaskID)
+
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			// No row was updated - job wasn't in a cancellable state
+			return false, nil
+		}
+		// Database error
+		return false, fmt.Errorf("failed to cancel job: %w", err)
+	}
+
+	// Row was updated - job was successfully cancelled
+	return true, nil
 }

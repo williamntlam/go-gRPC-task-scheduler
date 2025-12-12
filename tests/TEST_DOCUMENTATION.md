@@ -14,6 +14,7 @@ This directory contains comprehensive tests for the gRPC Task Scheduler.
 ## Test Utilities
 
 The `internal/testutil` package provides:
+
 - `SetupTestDB()` - Creates test database connection
 - `SetupTestRedis()` - Creates test Redis client
 - `CleanupTestDB()` - Cleans up test database
@@ -25,6 +26,7 @@ The `internal/testutil` package provides:
 ### Prerequisites
 
 1. Start test infrastructure:
+
    ```bash
    make dev
    ```
@@ -72,6 +74,7 @@ go tool cover -html=coverage.out
 The test suite covers:
 
 ### Unit Tests
+
 - ✅ Database operations (CRUD)
 - ✅ Redis queue operations
 - ✅ Job validation
@@ -80,6 +83,7 @@ The test suite covers:
 - ✅ Concurrency scenarios
 
 ### Integration Tests
+
 - ✅ End-to-end job flow (submit → process → complete)
 - ✅ Job retry flow
 - ✅ Job cancellation flow
@@ -101,11 +105,13 @@ When adding new tests:
 ## Test Dependencies
 
 Tests require:
+
 - `github.com/stretchr/testify` - Assertions and test helpers
 - Test database (CockroachDB)
 - Test Redis instance
 
 Install testify:
+
 ```bash
 go get github.com/stretchr/testify/assert
 go get github.com/stretchr/testify/require

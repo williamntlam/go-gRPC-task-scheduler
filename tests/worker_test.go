@@ -254,7 +254,7 @@ func TestWorkerExecuteHandler(t *testing.T) {
 	t.Run("executes db_tx handler", func(t *testing.T) {
 		jobID := uuid.New()
 		payload := map[string]interface{}{
-			"query": "SELECT 1",
+			"query":  "SELECT 1",
 			"params": []interface{}{},
 		}
 		payloadJSON, _ := json.Marshal(payload)
