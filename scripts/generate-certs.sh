@@ -41,15 +41,19 @@ echo "Step 1: Generating CA private key..."
 openssl genrsa -out "$CA_KEY" 2048
 chmod 600 "$CA_KEY"
 
-# Step 2: Generate CA certificate (self-signed)
+# Step 2: Generate CA certificate (self-signed) with proper extensions
 echo "Step 2: Generating CA certificate..."
 openssl req -new -x509 -key "$CA_KEY" -out "$CA_CRT" -days 365 \
-  -subj "/CN=Local Development CA/O=Development/C=US"
+  -subj "/CN=Local Development CA/O=Development/C=US" \
+  -extensions v3_ca -config <(echo "[req]"; echo "distinguished_name=req"; echo "[v3_ca]"; echo "basicConstraints=critical,CA:true"; echo "keyUsage=keyCertSign,cRLSign")
 
 # Step 3: Generate server private key
 echo "Step 3: Generating server private key..."
 openssl genrsa -out "$SERVER_KEY" 2048
-chmod 600 "$SERVER_KEY"
+# Set permissions: readable by all (required for Docker bind mount access)
+# Note: For development only. In production, use proper user/group mapping
+# or copy certificates into container image with correct ownership
+chmod 644 "$SERVER_KEY"
 
 # Step 4: Generate server certificate signing request (CSR) with SAN
 echo "Step 4: Generating server certificate signing request..."

@@ -87,6 +87,8 @@ services:
     volumes:
       - ./envoy.yaml:/etc/envoy/envoy.yaml
       # Mount TLS certificates for TLS termination (one-way TLS)
+      # Note: Ensure ../certs/ directory exists with server.crt and server.key before starting
+      # Run: make tls-certs (from project root) to generate certificates
       - ../certs:/etc/envoy/certs:ro
     networks:
       - scheduler-network
