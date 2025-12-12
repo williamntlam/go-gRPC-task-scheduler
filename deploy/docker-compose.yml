@@ -3,7 +3,7 @@ services:
   cockroachdb:
     image: cockroachdb/cockroach:latest
     container_name: cockroachdb
-    command: start-single-node --insecure --http-addr=:8080
+    command: cockroach start-single-node --insecure --http-addr=:8080
     ports:
       - "26257:26257" # SQL port
       - "8082:8080" # Admin UI (changed to avoid conflict with Envoy on 8080)
