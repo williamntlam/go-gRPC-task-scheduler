@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -61,10 +62,22 @@ func SetupTestDB(ctx context.Context, cfg TestConfig) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("failed to setup test database: %w", err)
 	}
 
-	// Test connection
+	// Test connection and verify we're connected to the right database
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("failed to ping test database: %w", err)
+	}
+
+	// Verify database exists by checking current database
+	var currentDB string
+	if err := pool.QueryRow(ctx, "SELECT current_database()").Scan(&currentDB); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("failed to verify database: %w", err)
+	}
+
+	if currentDB != cfg.DBDatabase {
+		pool.Close()
+		return nil, fmt.Errorf("connected to wrong database: expected %s, got %s", cfg.DBDatabase, currentDB)
 	}
 
 	return pool, nil
@@ -88,12 +101,38 @@ func SetupTestRedis(ctx context.Context, cfg TestConfig) (*redisc.Client, error)
 }
 
 // CleanupTestDB truncates all tables to clean up test data
+// If tables don't exist, this is a no-op (useful for first run)
 func CleanupTestDB(ctx context.Context, pool *pgxpool.Pool) error {
+	// Check if database connection is valid
+	if err := pool.Ping(ctx); err != nil {
+		// If connection fails, database might not exist yet - that's okay for first cleanup
+		return nil
+	}
+
 	tables := []string{"task_attempts", "tasks"}
 	for _, table := range tables {
-		query := fmt.Sprintf("TRUNCATE TABLE %s CASCADE", table)
-		if _, err := pool.Exec(ctx, query); err != nil {
-			return fmt.Errorf("failed to truncate table %s: %w", table, err)
+		// Check if table exists before truncating
+		var exists bool
+		checkQuery := `
+			SELECT EXISTS (
+				SELECT FROM information_schema.tables 
+				WHERE table_schema = 'public' AND table_name = $1
+			)
+		`
+		if err := pool.QueryRow(ctx, checkQuery, table).Scan(&exists); err != nil {
+			// If we can't check, skip this table (might be permissions issue or table doesn't exist)
+			continue
+		}
+
+		if exists {
+			query := fmt.Sprintf("TRUNCATE TABLE %s CASCADE", table)
+			if _, err := pool.Exec(ctx, query); err != nil {
+				// Ignore errors about tables not existing (race condition)
+				if strings.Contains(err.Error(), "does not exist") {
+					continue
+				}
+				return fmt.Errorf("failed to truncate table %s: %w", table, err)
+			}
 		}
 	}
 	return nil
