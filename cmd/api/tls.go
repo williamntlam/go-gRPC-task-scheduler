@@ -13,6 +13,27 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
+// NOTE: TLS Architecture Decision
+//
+// For separation of concerns, TLS termination is handled at the load balancer (Envoy) level.
+// This means:
+//   - Clients connect to Envoy with TLS (secure)
+//   - Envoy communicates with backend API servers over plain gRPC (internal network)
+//   - The Go application doesn't need to handle TLS certificates
+//
+// Benefits:
+//   - Centralized certificate management (update certs in one place)
+//   - Better performance (TLS offloading from app servers)
+//   - Simpler application code (no TLS configuration needed)
+//   - Easier certificate rotation
+//
+// The functions below are kept for advanced use cases where you might want:
+//   - End-to-end encryption (TLS from client all the way to app)
+//   - Direct client connections (bypassing load balancer)
+//   - Additional security layers
+//
+// For most production deployments, use TLS at Envoy and keep the app servers without TLS.
+
 // loadServerTLSConfig loads TLS credentials for the gRPC server
 // This function should:
 // 1. Read TLS_CERT_PATH and TLS_KEY_PATH from environment variables

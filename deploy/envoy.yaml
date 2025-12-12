@@ -1,0 +1,109 @@
+static_resources:
+  listeners:
+    - name: listener_0
+      address:
+        socket_address:
+          protocol: TCP
+          address: 0.0.0.0
+          port_value: 8080
+      filter_chains:
+        # TLS termination at load balancer (recommended for production)
+        # Uncomment transport_socket section and provide certificates for TLS
+        # - transport_socket:
+        #     name: envoy.transport_sockets.tls
+        #     typed_config:
+        #       "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+        #       common_tls_context:
+        #         tls_certificates:
+        #           - certificate_chain:
+        #               filename: /etc/envoy/certs/server.crt
+        #             private_key:
+        #               filename: /etc/envoy/certs/server.key
+        #         # Optional: Require client certificates (mTLS)
+        #         # validation_context:
+        #         #   trusted_ca:
+        #         #     filename: /etc/envoy/certs/ca.crt
+        #         #   require_client_certificate: true
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: grpc_json
+                codec_type: AUTO
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: local_service
+                      domains: ["*"]
+                      routes:
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: api_cluster
+                            timeout: 60s
+                http_filters:
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: api_cluster
+      connect_timeout: 5s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN  # Load balancing policy: ROUND_ROBIN, LEAST_REQUEST, RING_HASH
+      http2_protocol_options: {}
+      # Optional: Enable TLS from Envoy to Go app (end-to-end encryption)
+      # Uncomment if you need TLS all the way to the application:
+      # transport_socket:
+      #   name: envoy.transport_sockets.tls
+      #   typed_config:
+      #     "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+      #     common_tls_context:
+      #       validation_context:
+      #         trusted_ca:
+      #           filename: /etc/envoy/certs/ca.crt
+      #     sni: api  # Server name for SNI
+      health_checks:
+        - timeout: 1s
+          interval: 10s
+          unhealthy_threshold: 3
+          healthy_threshold: 3
+          http_health_check:
+            path: "/health"
+            expected_statuses:
+              - start: 200
+                end: 399
+          interval_jitter: 1s
+      load_assignment:
+        cluster_name: api_cluster
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: api
+                      port_value: 8081
+                  health_check_config:
+                    port_value: 2112
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: api-2
+                      port_value: 8081
+                  health_check_config:
+                    port_value: 2112
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: api-3
+                      port_value: 8081
+                  health_check_config:
+                    port_value: 2112
+
+admin:
+  address:
+    socket_address:
+      protocol: TCP
+      address: 0.0.0.0
+      port_value: 9901
+

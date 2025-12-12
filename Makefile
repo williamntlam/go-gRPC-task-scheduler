@@ -11,13 +11,15 @@ teardown:
 	@chmod +x scripts/teardown.sh scripts/shutdown.sh
 	./scripts/teardown.sh $(if $(CLEAN),--clean,)
 
-# Start all infrastructure services (Redis, CockroachDB, Prometheus, Grafana)
+# Start all infrastructure services (Redis, CockroachDB, Prometheus, Grafana, Envoy Load Balancer)
 dev:
 	cd deploy && docker compose up -d
 	@echo "Infrastructure services started!"
-	@echo "CockroachDB UI: http://localhost:8080"
+	@echo "CockroachDB UI: http://localhost:8082"
 	@echo "Grafana: http://localhost:3000 (admin/admin)"
 	@echo "Prometheus: http://localhost:9090"
+	@echo "Envoy Load Balancer: localhost:8080 (gRPC endpoint)"
+	@echo "Envoy Admin: http://localhost:9901"
 
 # Alias for dev
 up: dev

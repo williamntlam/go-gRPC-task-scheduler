@@ -6,7 +6,7 @@ services:
     command: start-single-node --insecure --http-addr=:8080
     ports:
       - "26257:26257"  # SQL port
-      - "8080:8080"    # Admin UI
+      - "8082:8080"    # Admin UI (changed to avoid conflict with Envoy on 8080)
     volumes:
       - cockroachdb-data:/cockroach/cockroach-data
     networks:
@@ -74,6 +74,131 @@ services:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 10s
+      retries: 3
+
+  # Envoy Proxy - Load balancer and reverse proxy for gRPC
+  # TLS termination happens here (separation of concerns)
+  envoy:
+    image: envoyproxy/envoy:v1.29-latest
+    container_name: envoy
+    ports:
+      - "8080:8080"    # gRPC endpoint (load balanced, TLS terminated here)
+      - "9901:9901"    # Admin interface
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml
+      # Uncomment to mount TLS certificates for TLS termination:
+      # - ./tls/certs:/etc/envoy/certs:ro
+    networks:
+      - scheduler-network
+    command: /usr/local/bin/envoy -c /etc/envoy/envoy.yaml --service-cluster api_cluster
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9901/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # API Server Instance 1
+  api:
+    build:
+      context: ..
+      dockerfile: cmd/api/Dockerfile
+    container_name: api
+    ports:
+      - "8081:8081"    # Direct access (bypass load balancer)
+      - "2112:2112"    # Metrics
+    environment:
+      - GRPC_PORT=8081
+      - METRICS_PORT=2112
+      - COCKROACHDB_HOST=cockroachdb
+      - COCKROACHDB_PORT=26257
+      - COCKROACHDB_USER=root
+      - COCKROACHDB_PASSWORD=
+      - COCKROACHDB_DATABASE=scheduler
+      - COCKROACHDB_SSLMODE=disable
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+    networks:
+      - scheduler-network
+    depends_on:
+      cockroachdb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:2112/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # API Server Instance 2 (for load balancing)
+  api-2:
+    build:
+      context: ..
+      dockerfile: cmd/api/Dockerfile
+    container_name: api-2
+    ports:
+      - "8083:8081"    # Direct access
+      - "2114:2112"    # Metrics
+    environment:
+      - GRPC_PORT=8081
+      - METRICS_PORT=2112
+      - COCKROACHDB_HOST=cockroachdb
+      - COCKROACHDB_PORT=26257
+      - COCKROACHDB_USER=root
+      - COCKROACHDB_PASSWORD=
+      - COCKROACHDB_DATABASE=scheduler
+      - COCKROACHDB_SSLMODE=disable
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+    networks:
+      - scheduler-network
+    depends_on:
+      cockroachdb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:2112/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # API Server Instance 3 (for load balancing)
+  api-3:
+    build:
+      context: ..
+      dockerfile: cmd/api/Dockerfile
+    container_name: api-3
+    ports:
+      - "8084:8081"    # Direct access
+      - "2115:2112"    # Metrics
+    environment:
+      - GRPC_PORT=8081
+      - METRICS_PORT=2112
+      - COCKROACHDB_HOST=cockroachdb
+      - COCKROACHDB_PORT=26257
+      - COCKROACHDB_USER=root
+      - COCKROACHDB_PASSWORD=
+      - COCKROACHDB_DATABASE=scheduler
+      - COCKROACHDB_SSLMODE=disable
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+    networks:
+      - scheduler-network
+    depends_on:
+      cockroachdb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:2112/health"]
+      interval: 10s
+      timeout: 5s
       retries: 3
 
 volumes:

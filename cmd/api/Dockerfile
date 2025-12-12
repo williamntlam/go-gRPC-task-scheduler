@@ -26,8 +26,10 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
 # Stage 2: Runtime
 FROM alpine:latest
 
-# Install CA certificates for HTTPS requests and wget for health checks
-RUN apk --no-cache add ca-certificates tzdata wget
+# Install CA certificates for HTTPS requests, wget for health checks, and grpc_health_probe for Envoy
+RUN apk --no-cache add ca-certificates tzdata wget curl && \
+    wget -qO /usr/local/bin/grpc_health_probe https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.24/grpc_health_probe-linux-amd64 && \
+    chmod +x /usr/local/bin/grpc_health_probe
 
 # Create non-root user
 RUN addgroup -g 1000 appuser && \
