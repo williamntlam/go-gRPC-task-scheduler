@@ -4,9 +4,12 @@ import (
 	// "crypto/tls"  // Uncomment when implementing loadMutualTLSConfig
 	// "log"         // Uncomment when implementing functions
 	// "os"          // Uncomment when implementing functions
-	// "fmt"         // Uncomment when implementing functions
+	"fmt"
 	// "crypto/x509" // Uncomment when implementing loadMutualTLSConfig
 
+	"log"
+
+	"github.com/williamntlam/go-grpc-task-scheduler/internal/utils"
 	"google.golang.org/grpc/credentials"
 )
 
@@ -30,27 +33,28 @@ import (
 //       grpcServer := grpc.NewServer() // Insecure mode
 //   }
 func loadServerTLSConfig() (credentials.TransportCredentials, error) {
-	// TODO: Implement this function
 	// Step 1: Get TLS_CERT_PATH from environment (use utils.GetEnv or os.Getenv)
 	// Step 2: Get TLS_KEY_PATH from environment
 	// Step 3: Check if both are set (if not, return nil, nil for insecure mode)
 	// Step 4: Use credentials.NewServerTLSFromFile(certPath, keyPath)
 	// Step 5: Return the credentials and any error
 	
-	// Example structure:
-	// certPath := os.Getenv("TLS_CERT_PATH")
-	// keyPath := os.Getenv("TLS_KEY_PATH")
-	// if certPath == "" || keyPath == "" {
-	//     log.Println("TLS certificates not provided, running in insecure mode")
-	//     return nil, nil
-	// }
-	// creds, err := credentials.NewServerTLSFromFile(certPath, keyPath)
-	// if err != nil {
-	//     return nil, err
-	// }
-	// return creds, nil
 
-	return nil, nil
+	certPath := utils.GetEnv("TLS_CERT_PATH", "")
+	keyPath := utils.GetEnv("TLS_KEY_PATH", "")
+
+	if certPath == "" || keyPath == "" {
+		log.Println("TLS certificates not provided. Running in insecure mode.")
+		return nil, nil
+	}
+
+	creds, err := credentials.NewServerTLSFromFile(certPath, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load server TLS: %w", err)
+	}
+
+	return creds, nil
+	
 }
 
 // loadClientTLSConfig loads TLS credentials for a gRPC client
