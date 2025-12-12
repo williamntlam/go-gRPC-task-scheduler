@@ -86,8 +86,8 @@ services:
       - "9901:9901"    # Admin interface
     volumes:
       - ./envoy.yaml:/etc/envoy/envoy.yaml
-      # Uncomment to mount TLS certificates for TLS termination:
-      # - ./tls/certs:/etc/envoy/certs:ro
+      # Mount TLS certificates for TLS termination (one-way TLS)
+      - ../certs:/etc/envoy/certs:ro
     networks:
       - scheduler-network
     command: /usr/local/bin/envoy -c /etc/envoy/envoy.yaml --service-cluster api_cluster

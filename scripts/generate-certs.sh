@@ -36,36 +36,54 @@ echo "Generating TLS Certificates for Development"
 echo "=========================================="
 echo ""
 
-# TODO: Implement certificate generation
 # Step 1: Generate CA private key
-#   openssl genrsa -out "$CA_KEY" 2048
-# Step 2: Generate CA certificate (self-signed)
-#   openssl req -new -x509 -key "$CA_KEY" -out "$CA_CRT" -days 365 \
-#     -subj "/CN=Local Development CA/O=Development/C=US"
-# Step 3: Generate server private key
-#   openssl genrsa -out "$SERVER_KEY" 2048
-# Step 4: Generate server certificate signing request (CSR)
-#   openssl req -new -key "$SERVER_KEY" -out "$SERVER_CSR" \
-#     -subj "/CN=localhost/O=Development/C=US"
-# Step 5: Sign server certificate with CA
-#   openssl x509 -req -in "$SERVER_CSR" -CA "$CA_CRT" -CAkey "$CA_KEY" \
-#     -CAcreateserial -out "$SERVER_CRT" -days 365
-# Step 6: (Optional) Generate client certificate for mTLS
-#   Similar steps for client.key, client.csr, client.crt
-# Step 7: Clean up CSR files (not needed after signing)
-#   rm "$SERVER_CSR" "$CLIENT_CSR" 2>/dev/null || true
+echo "Step 1: Generating CA private key..."
+openssl genrsa -out "$CA_KEY" 2048
+chmod 600 "$CA_KEY"
 
-echo "TODO: Implement certificate generation"
+# Step 2: Generate CA certificate (self-signed)
+echo "Step 2: Generating CA certificate..."
+openssl req -new -x509 -key "$CA_KEY" -out "$CA_CRT" -days 365 \
+  -subj "/CN=Local Development CA/O=Development/C=US"
+
+# Step 3: Generate server private key
+echo "Step 3: Generating server private key..."
+openssl genrsa -out "$SERVER_KEY" 2048
+chmod 600 "$SERVER_KEY"
+
+# Step 4: Generate server certificate signing request (CSR) with SAN
+echo "Step 4: Generating server certificate signing request..."
+openssl req -new -key "$SERVER_KEY" -out "$SERVER_CSR" \
+  -subj "/CN=localhost/O=Development/C=US" \
+  -addext "subjectAltName=DNS:localhost,DNS:*.localhost,IP:127.0.0.1,IP:0.0.0.0"
+
+# Step 5: Sign server certificate with CA
+echo "Step 5: Signing server certificate with CA..."
+openssl x509 -req -in "$SERVER_CSR" -CA "$CA_CRT" -CAkey "$CA_KEY" \
+  -CAcreateserial -out "$SERVER_CRT" -days 365 \
+  -extensions v3_req -extfile <(echo "[v3_req]"; echo "subjectAltName=DNS:localhost,DNS:*.localhost,IP:127.0.0.1,IP:0.0.0.0")
+
+# Step 6: Clean up CSR files (not needed after signing)
+echo "Step 6: Cleaning up temporary files..."
+rm "$SERVER_CSR" 2>/dev/null || true
+rm "$CERT_DIR/ca.srl" 2>/dev/null || true
+
 echo ""
-echo "Expected output files:"
+echo "=========================================="
+echo "Certificate generation complete!"
+echo "=========================================="
+echo ""
+echo "Generated files:"
 echo "  - $CA_KEY (CA private key)"
 echo "  - $CA_CRT (CA certificate)"
 echo "  - $SERVER_KEY (Server private key)"
 echo "  - $SERVER_CRT (Server certificate)"
 echo ""
-echo "After generation, set these environment variables:"
-echo "  export TLS_CERT_PATH=$SERVER_CRT"
-echo "  export TLS_KEY_PATH=$SERVER_KEY"
-echo "  export TLS_CA_PATH=$CA_CRT"
+echo "For Envoy TLS termination, these files are needed:"
+echo "  - $SERVER_CRT -> /etc/envoy/certs/server.crt"
+echo "  - $SERVER_KEY -> /etc/envoy/certs/server.key"
+echo ""
+echo "For client verification (optional):"
+echo "  - $CA_CRT (use this to verify the server certificate)"
 echo ""
 
