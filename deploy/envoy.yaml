@@ -8,23 +8,22 @@ static_resources:
           port_value: 8080
       filter_chains:
         # TLS termination at load balancer (recommended for production)
-        # Uncomment transport_socket section and provide certificates for TLS
-        # - transport_socket:
-        #     name: envoy.transport_sockets.tls
-        #     typed_config:
-        #       "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
-        #       common_tls_context:
-        #         tls_certificates:
-        #           - certificate_chain:
-        #               filename: /etc/envoy/certs/server.crt
-        #             private_key:
-        #               filename: /etc/envoy/certs/server.key
-        #         # Optional: Require client certificates (mTLS)
-        #         # validation_context:
-        #         #   trusted_ca:
-        #         #     filename: /etc/envoy/certs/ca.crt
-        #         #   require_client_certificate: true
-        - filters:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                tls_certificates:
+                  - certificate_chain:
+                      filename: /etc/envoy/certs/server.crt
+                    private_key:
+                      filename: /etc/envoy/certs/server.key
+                # Optional: Require client certificates (mTLS) - commented out for one-way TLS
+                # validation_context:
+                #   trusted_ca:
+                #     filename: /etc/envoy/certs/ca.crt
+                #   require_client_certificate: true
+          filters:
             - name: envoy.filters.network.http_connection_manager
               typed_config:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
