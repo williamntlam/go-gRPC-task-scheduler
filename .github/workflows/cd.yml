@@ -38,8 +38,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ghcr.io/${{ github.repository }}/api
-            ghcr.io/${{ github.repository }}/worker
+            ghcr.io/${{ github.repository_owner }}/go-grpc-task-scheduler/api
+            ghcr.io/${{ github.repository_owner }}/go-grpc-task-scheduler/worker
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -54,7 +54,7 @@ jobs:
           context: .
           file: ./cmd/api/Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository }}/api:${{ steps.meta.outputs.version }}
+          tags: ghcr.io/${{ github.repository_owner }}/go-grpc-task-scheduler/api:${{ steps.meta.outputs.version }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -65,7 +65,7 @@ jobs:
           context: .
           file: ./cmd/worker/Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository }}/worker:${{ steps.meta.outputs.version }}
+          tags: ghcr.io/${{ github.repository_owner }}/go-grpc-task-scheduler/worker:${{ steps.meta.outputs.version }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -73,9 +73,9 @@ jobs:
       - name: Image summary
         run: |
           echo "## Docker Images Built" >> $GITHUB_STEP_SUMMARY
-          echo "- API: ghcr.io/${{ github.repository }}/api:${{ steps.meta.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Worker: ghcr.io/${{ github.repository }}/worker:${{ steps.meta.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- API: ghcr.io/${{ github.repository_owner }}/go-grpc-task-scheduler/api:${{ steps.meta.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Worker: ghcr.io/${{ github.repository_owner }}/go-grpc-task-scheduler/worker:${{ steps.meta.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Images are available at:" >> $GITHUB_STEP_SUMMARY
-          echo "- https://github.com/${{ github.repository }}/pkgs/container/api" >> $GITHUB_STEP_SUMMARY
-          echo "- https://github.com/${{ github.repository }}/pkgs/container/worker" >> $GITHUB_STEP_SUMMARY
+          echo "- https://github.com/${{ github.repository_owner }}/go-grpc-task-scheduler/pkgs/container/go-grpc-task-scheduler-api" >> $GITHUB_STEP_SUMMARY
+          echo "- https://github.com/${{ github.repository_owner }}/go-grpc-task-scheduler/pkgs/container/go-grpc-task-scheduler-worker" >> $GITHUB_STEP_SUMMARY
