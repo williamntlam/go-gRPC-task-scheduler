@@ -29,7 +29,7 @@ jobs:
           args: "-no-fail -fmt json -out gosec-report.json ./..."
 
       - name: Upload Gosec results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: gosec-report
           path: gosec-report.json
@@ -80,7 +80,7 @@ jobs:
         # This is expected - scans still run successfully
 
       - name: Upload Trivy results as artifacts (always available)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: trivy-security-results
           path: |
