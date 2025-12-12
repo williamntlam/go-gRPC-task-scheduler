@@ -9,6 +9,11 @@ on:
     # Run weekly security scans
     - cron: "0 0 * * 0"
 
+# Required permissions for security scanning
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
   # Scan Go dependencies for vulnerabilities
   gosec:
@@ -50,9 +55,13 @@ jobs:
           output: "trivy-api-results.sarif"
 
       - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
+        continue-on-error: true
         with:
           sarif_file: "trivy-api-results.sarif"
+          wait-for-processing: false
+        # Note: May fail on PRs from forks due to security permissions
+        # Results are still generated and available as artifacts
 
       - name: Run Trivy on worker image
         uses: aquasecurity/trivy-action@master
@@ -62,6 +71,20 @@ jobs:
           output: "trivy-worker-results.sarif"
 
       - name: Upload worker Trivy results
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
+        continue-on-error: true
         with:
           sarif_file: "trivy-worker-results.sarif"
+          wait-for-processing: false
+        # Note: May fail on PRs from forks due to security permissions
+        # This is expected - scans still run successfully
+
+      - name: Upload Trivy results as artifacts (always available)
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-security-results
+          path: |
+            trivy-api-results.sarif
+            trivy-worker-results.sarif
+          retention-days: 7
+          if-no-files-found: ignore
