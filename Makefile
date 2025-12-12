@@ -1,6 +1,7 @@
 .PHONY: dev up down api worker migrate clean setup teardown test test-setup test-clean test-down
 .PHONY: docker-build-api docker-build-worker docker-build docker-run-api docker-run-worker docker-stop-api docker-stop-worker
 .PHONY: tls-certs tls-test tls-setup submit-job-tls envoy-status envoy-logs envoy-restart envoy-validate envoy-fix-certs
+.PHONY: ci-lint ci-test ci-build ci-all
 
 # Complete setup: start infrastructure and initialize database
 setup:
@@ -408,4 +409,53 @@ envoy-fix-certs:
 	@echo ""
 	@echo "Step 5: Checking Envoy status..."
 	@$(MAKE) envoy-status
+
+# ============================================================================
+# CI/CD Commands (for local testing and CI pipelines)
+# ============================================================================
+
+# Run linting checks (format, vet)
+ci-lint:
+	@echo "🔍 Running linting checks..."
+	@echo ""
+	@echo "Checking code format..."
+	@if [ "$$(gofmt -s -l . | wc -l)" -gt 0 ]; then \
+		echo "❌ Code is not formatted. Run 'gofmt -s -w .'"; \
+		gofmt -s -d .; \
+		exit 1; \
+	fi
+	@echo "✅ Code is properly formatted"
+	@echo ""
+	@echo "Running go vet..."
+	@go vet ./... || exit 1
+	@echo "✅ go vet passed"
+	@echo ""
+	@echo "✅ All linting checks passed"
+
+# Run all tests (unit + integration)
+ci-test:
+	@echo "🧪 Running tests..."
+	@echo ""
+	@echo "Running unit tests..."
+	@go test -v -race -coverprofile=coverage.out -covermode=atomic ./internal/... || exit 1
+	@echo ""
+	@echo "Running integration tests..."
+	@go test -v -race -timeout 10m ./tests/... || exit 1
+	@echo ""
+	@echo "✅ All tests passed"
+	@echo ""
+	@echo "Coverage report:"
+	@go tool cover -func=coverage.out | tail -1
+
+# Build Docker images
+ci-build:
+	@echo "🐳 Building Docker images..."
+	@docker build -t scheduler-api:ci -f cmd/api/Dockerfile . || exit 1
+	@docker build -t scheduler-worker:ci -f cmd/worker/Dockerfile . || exit 1
+	@echo "✅ Docker images built successfully"
+
+# Run all CI checks locally
+ci-all: ci-lint ci-test ci-build
+	@echo ""
+	@echo "✅ All CI checks passed!"
 
