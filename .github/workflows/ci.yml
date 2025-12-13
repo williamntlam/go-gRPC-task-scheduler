@@ -97,21 +97,6 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     services:
-      cockroachdb:
-        image: cockroachdb/cockroach:v24.2.4
-        ports:
-          - 26257:26257
-          - 8080:8080
-        options: >-
-          --health-cmd="cockroach node status --insecure || exit 1"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-        env:
-          COCKROACH_DATABASE: scheduler_test
-        # Command to start CockroachDB in single-node mode
-        # GitHub Actions services support the 'command' field
-        command: start-single-node --insecure --http-addr=:8080
       redis:
         image: redis:7-alpine
         ports:
@@ -142,26 +127,32 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
+      - name: Start CockroachDB (single-node)
+        run: |
+          docker run -d --name cockroachdb \
+            -p 26257:26257 -p 8080:8080 \
+            cockroachdb/cockroach:v24.2.4 \
+            start-single-node --insecure --http-addr=:8080 --listen-addr=:26257
+
       - name: Wait for CockroachDB
         run: |
-          echo "Waiting for CockroachDB to be ready..."
-          for i in {1..30}; do
-            if nc -z localhost 26257; then
-              # Try to connect and verify it's working
-              if docker run --rm --network host cockroachdb/cockroach:v24.2.4 sql --insecure --host=localhost:26257 -e "SELECT 1" > /dev/null 2>&1; then
-                echo "✅ CockroachDB is ready"
-                break
-              fi
+          echo "Waiting for CockroachDB..."
+          for i in {1..60}; do
+            if docker exec cockroachdb cockroach sql --insecure -e "SELECT 1" >/dev/null 2>&1; then
+              echo "✅ CockroachDB is ready"
+              exit 0
             fi
-            echo "   Waiting for CockroachDB... (attempt $i/30)"
             sleep 2
           done
+          echo "❌ CockroachDB did not become ready in time"
+          docker logs cockroachdb || true
+          exit 1
 
       - name: Wait for Redis
         run: |
           for i in {1..30}; do
             if nc -z localhost 6379; then
-              echo "Redis is ready"
+              echo "✅ Redis is ready"
               break
             fi
             echo "Waiting for Redis..."
@@ -170,16 +161,8 @@ jobs:
 
       - name: Create test database and schema
         run: |
-          echo "Creating test database and schema..."
-          # Get the service container name (GitHub Actions uses a generated name)
-          CONTAINER_NAME=$(docker ps --filter "ancestor=cockroachdb/cockroach:v24.2.4" --format "{{.Names}}" | head -1)
-          echo "CockroachDB container: $CONTAINER_NAME"
-          
-          # Create database
-          docker exec $CONTAINER_NAME cockroach sql --insecure -e "CREATE DATABASE IF NOT EXISTS scheduler_test;"
-          
-          # Create schema in the test database
-          docker exec -i $CONTAINER_NAME cockroach sql --insecure --database=scheduler_test <<'EOF'
+          docker exec cockroachdb cockroach sql --insecure -e "CREATE DATABASE IF NOT EXISTS scheduler_test;"
+          docker exec -i cockroachdb cockroach sql --insecure --database=scheduler_test <<'EOF'
           CREATE TABLE IF NOT EXISTS tasks (
               task_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
               type STRING NOT NULL,
@@ -192,7 +175,7 @@ jobs:
               created_at TIMESTAMPTZ DEFAULT now(),
               updated_at TIMESTAMPTZ DEFAULT now()
           );
-          
+
           CREATE TABLE IF NOT EXISTS task_attempts (
               task_id UUID NOT NULL,
               started_at TIMESTAMPTZ NOT NULL,
@@ -202,12 +185,11 @@ jobs:
               PRIMARY KEY (task_id, started_at),
               FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE
           );
-          
+
           CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status) WHERE status IN ('queued', 'running');
           CREATE INDEX IF NOT EXISTS idx_tasks_next_run_at ON tasks(next_run_at) WHERE status = 'retry';
           CREATE INDEX IF NOT EXISTS idx_tasks_priority_status ON tasks(priority, status);
           EOF
-          echo "✅ Test database and schema created"
 
       - name: Run integration tests
         env:
@@ -223,7 +205,10 @@ jobs:
         run: |
           go test -v -race -timeout 10m ./tests/... -run TestEndToEndJobFlow
 
-      # Note: GitHub Actions automatically cleans up service containers
+      - name: Cleanup CockroachDB
+        if: always()
+        run: |
+          docker rm -f cockroachdb || true
 
   # Build Docker images
   build:
