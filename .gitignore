@@ -41,3 +41,7 @@ tls/
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Node.js dependencies
+node_modules/
+# Note: package-lock.json should be committed to lock dependency versions
