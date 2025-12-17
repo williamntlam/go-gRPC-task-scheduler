@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grpc-gateway
+  namespace: task-scheduler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grpc-gateway
+  template:
+    metadata:
+      labels:
+        app: grpc-gateway
+    spec:
+      containers:
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          args: ["-c", "/etc/envoy/envoy.yaml", "--service-cluster", "api_cluster"]
+          ports:
+            - name: grpc
+              containerPort: 8080
+            - name: admin
+              containerPort: 9901
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 3
+            periodSeconds: 5
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grpc-gateway
+  namespace: task-scheduler
+spec:
+  selector:
+    app: grpc-gateway
+  ports:
+    - name: grpc
+      port: 8080
+      targetPort: 8080
+  type: NodePort

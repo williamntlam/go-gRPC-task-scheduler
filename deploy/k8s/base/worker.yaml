@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler-worker
+  namespace: task-scheduler
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: scheduler-worker
+  template:
+    metadata:
+      labels:
+        app: scheduler-worker
+    spec:
+      containers:
+        - name: worker
+          image: scheduler-worker:local
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: scheduler-env
+          # Worker binary likely exposes metrics on 2113 by default; keep ports optional.
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"

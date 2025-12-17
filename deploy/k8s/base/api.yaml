@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scheduler-api
+  namespace: task-scheduler
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: scheduler-api
+  template:
+    metadata:
+      labels:
+        app: scheduler-api
+    spec:
+      containers:
+        - name: api
+          image: scheduler-api:local
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: scheduler-env
+          ports:
+            - name: grpc
+              containerPort: 8081
+            - name: metrics
+              containerPort: 2112
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 2112
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 2112
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scheduler-api
+  namespace: task-scheduler
+spec:
+  selector:
+    app: scheduler-api
+  ports:
+    - name: grpc
+      port: 8081
+      targetPort: 8081
+  type: ClusterIP
